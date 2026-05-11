@@ -1,0 +1,155 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #09090b;
+}
+
+body {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: none;
+  outline: none;
+}
+
+/* Custom Electron title bar */
+
+.app-titlebar {
+  height: 30px;
+  flex-shrink: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  background: #111116;
+  box-shadow: inset 0 -1px 0 #27272a;
+
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-titlebar-title {
+  padding-left: 12px;
+
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+
+  color: #a1a1aa;
+}
+
+.app-titlebar-controls {
+  height: 100%;
+  display: flex;
+
+  -webkit-app-region: no-drag;
+}
+
+/* Disable drag region when maximized - fixes click-blocking on Linux/XWayland */
+.app-titlebar--maximized {
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-button {
+  width: 44px;
+  height: 100%;
+
+  background: transparent;
+  color: #a1a1aa;
+
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 16px;
+  line-height: 1;
+
+  cursor: pointer;
+
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-button:hover {
+  background: #27272a;
+  color: #f4f4f5;
+}
+
+.titlebar-button-close:hover {
+  background: #dc2626;
+  color: white;
+}
+
+/* Scrollbars */
+
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 3px;
+}
+
+/* Inputs */
+
+/* Strip the up/down spinner from numeric inputs across Electron/Chromium.
+   `appearance: none` on the pseudo isn't always enough - recent Chromium
+   versions render hover-only arrows via shadow DOM, so `display: none` is
+   the bulletproof part. `-moz-appearance: textfield` covers Firefox in case
+   the renderer is ever moved off Chromium. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: #3f3f46;
+  border-radius: 2px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+
+  background: #22d3ee;
+  cursor: pointer;
+  border: none;
+}
+
+select:focus {
+  border-color: #0891b2;
+}

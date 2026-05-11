@@ -1,0 +1,12 @@
+node_modules/
+build/
+dist/
+release/
+src/backend/third_party/
+*.o
+*.exe
+.DS_Store
+Thumbs.db
+logs/
+*.log
+out/

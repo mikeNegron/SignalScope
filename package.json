@@ -1,0 +1,89 @@
+{
+  "name": "signalscope",
+  "version": "0.2.0",
+  "description": "Browser-class signal analyzer with native C++ DSP backend",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:ui": "mkdir -p dist/renderer && cp src/renderer/index.html dist/renderer/ && esbuild src/renderer/index.jsx --bundle --outfile=dist/renderer/bundle.js --loader:.jsx=jsx --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\"",
+    "dev:ui": "mkdir -p dist/renderer && cp src/renderer/index.html dist/renderer/ && esbuild src/renderer/index.jsx --bundle --outfile=dist/renderer/bundle.js --loader:.jsx=jsx --jsx=automatic --define:process.env.NODE_ENV=\\\"development\\\"",
+    "dev": "npm run dev:ui && NODE_ENV=development electron .",
+    "dev:backend": "npm run dev:ui && NODE_ENV=development electron . --backend",
+    "build:backend": "cmake -B build/backend -S src/backend && cmake --build build/backend --config Release",
+    "build:backend:static": "cmake -B build/backend -S src/backend -DSTATIC_FFTW=ON && cmake --build build/backend --config Release",
+    "build:backend:simple-ws": "cmake -B build/backend-simple -S src/backend -DFORCE_SIMPLE_WS=ON && cmake --build build/backend-simple --config Release",
+    "test:backend": "npm run build:backend:simple-ws && cmake -B build/tests -S tests/backend && cmake --build build/tests && ctest --test-dir build/tests --output-on-failure",
+    "test:renderer": "vitest run",
+    "test": "npm run test:backend && npm run test:renderer",
+    "prestart": "npm run build:ui",
+    "predist": "npm run build:backend && npm run build:ui",
+    "dist": "electron-builder",
+    "dist:linux":        "npm run build:backend        && npm run build:ui && electron-builder --linux AppImage",
+    "dist:linux:static": "npm run build:backend:static && npm run build:ui && electron-builder --linux AppImage   '--config.appImage.artifactName=SignalScope-${version}-static.${ext}'",
+    "dist:win":          "npm run build:backend        && npm run build:ui && electron-builder --win portable",
+    "dist:win:static":   "npm run build:backend:static && npm run build:ui && electron-builder --win portable     '--config.portable.artifactName=SignalScope-${version}-portable-static.${ext}'",
+    "dist:mac":          "npm run build:backend        && npm run build:ui && electron-builder --mac dmg",
+    "dist:mac:static":   "npm run build:backend:static && npm run build:ui && electron-builder --mac dmg          '--config.dmg.artifactName=SignalScope-${version}-static.${ext}'",
+    "pack:linux":        "npm run dist:linux        && cmake -B build/pack-shared -S packaging -DSIGNALSCOPE_VARIANT=shared && cmake --build build/pack-shared --target package",
+    "pack:linux:static": "npm run dist:linux:static && cmake -B build/pack-static -S packaging -DSIGNALSCOPE_VARIANT=static && cmake --build build/pack-static --target package",
+    "pack:win":          "npm run dist:win          && cmake -B build/pack-shared -S packaging -DSIGNALSCOPE_VARIANT=shared && cmake --build build/pack-shared --target package",
+    "pack:win:static":   "npm run dist:win:static   && cmake -B build/pack-static -S packaging -DSIGNALSCOPE_VARIANT=static && cmake --build build/pack-static --target package",
+    "pack:mac":          "npm run dist:mac          && cmake -B build/pack-shared -S packaging -DSIGNALSCOPE_VARIANT=shared && cmake --build build/pack-shared --target package",
+    "pack:mac:static":   "npm run dist:mac:static   && cmake -B build/pack-static -S packaging -DSIGNALSCOPE_VARIANT=static && cmake --build build/pack-static --target package"
+  },
+  "build": {
+    "appId": "com.signalscope.app",
+    "productName": "SignalScope",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/main/**/*",
+      "dist/renderer/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend/",
+        "to": "backend",
+        "filter": [
+          "signalscope-backend",
+          "signalscope-backend.exe"
+        ]
+      }
+    ],
+    "linux": {
+      "target": "AppImage",
+      "category": "Audio;Science;Education",
+      "icon": "assets/icon.png"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities",
+      "icon": "assets/icon.icns"
+    },
+    "portable": {
+      "artifactName": "SignalScope-${version}-portable-shared.${ext}"
+    },
+    "appImage": {
+      "artifactName": "SignalScope-${version}-shared.${ext}"
+    },
+    "dmg": {
+      "artifactName": "SignalScope-${version}-shared.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}
