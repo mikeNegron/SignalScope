@@ -1,6 +1,6 @@
 # SignalScope
 
-A browser-class signal analyzer with a native C++ DSP backend — a modern Baudline for the desktop, packaged as a single distributable file.
+A browser-class signal analyzer with a native C++ DSP backend, packaged as a single distributable file.
 
 ## Architecture
 
@@ -88,8 +88,6 @@ The `version` byte is the wire-protocol version (currently `0x01`). A renderer d
 | 0x08 | SpectrumStats  | `float[3 + 3K + 2]` — `[noise_floor, fund_hz, K, K×(bin,val,prom), spec_min, spec_max]`  |
 | 0x09 | HistoryRow     | `float[N/2 or N]` — historical spectrum row; `frame_id` carries the row's offset back    |
 
-(`0x05` was Periodicity — removed when the feature never wired up. Type values are not reused until the next protocol-version bump so older renderers can't mis-decode.)
-
 Flags: `Clipping=0x01`, `Overflow=0x02`, `TwoSided=0x04`, `Complex=0x08`. `Complex` reflects the **source** (file IQ / SDR); `TwoSided` reflects the **output spectrum span** (which can be set independently when the DDC or Hilbert pre-stage is active on a real source).
 
 Commands flow renderer → backend as JSON text frames: `{ "cmd": "set_fft_size", "value": 4096 }` etc. Parsed by nlohmann/json (vendored) and dispatched through a string-keyed table in [`main.cpp`](src/backend/main.cpp). Endianness contract: all multi-byte fields and the float payload are **little-endian** on the wire; current targets (x86/ARM desktop) are LE-native, and the SDR listener decodes IEEE-754 LE explicitly so a hypothetical BE host stays correct.
@@ -109,10 +107,9 @@ npm run build:backend
 # 4. Launch
 npm start              # production UI bundle
 npm run dev            # development UI bundle (React DevTools)
-npm run dev:backend    # dev UI + force Electron to spawn a fresh backend
 ```
 
-`npm start` runs `prestart` automatically, which rebuilds the renderer bundle. `npm run dev` produces a non-minified bundle that's easier to debug but leaks `PerformanceMeasure` objects under sustained data load — keep it for development only. `npm run dev:backend` adds the `--backend` flag so Electron spawns its own backend process even if one is already listening on `ws://localhost:8765`.
+`npm start` runs `prestart` automatically, which rebuilds the renderer bundle. `npm run dev` produces a non-minified bundle that's easier to debug. Set `SIGNALSCOPE_NO_BACKEND=1` (or pass `--no-backend`) to start the app in simulation-only mode without spawning the backend process.
 
 The renderer bundle commands run inside `prestart` / `predist` so you rarely call them directly, but they exist on their own:
 
@@ -124,7 +121,7 @@ npm run dev:ui         # same, but with NODE_ENV=development
 ### Prerequisites
 
 - **Node 22+** and **npm**
-- **CMake 3.20+**, a **C++20 compiler** (g++ 13 / clang 16 / MSVC 2022) — backend uses `std::span`, `std::numbers`, `std::bit_ceil`, designated initializers, concepts-adjacent require expressions, etc.
+- **CMake 3.20+**, a **C++20 compiler** (g++ 13 / clang 16 / MSVC 2022)
 - **fftw3f** (single-precision FFTW) — `libfftw3-dev` on Debian/Ubuntu, `brew install fftw` on macOS
 - Linux audio: ALSA (`libasound2-dev`) and PulseAudio (`libpulse-dev`)
 - macOS / Windows audio works out of the box (CoreAudio / WASAPI via miniaudio)
@@ -205,22 +202,22 @@ ALSA / PulseAudio remain dynamically linked even in the static build — those a
 
 ## C++ Backend Standalone
 
-The backend can run independently for headless or remote use. The renderer connects to whatever URL `BACKEND_WS_URL` points to (default `ws://localhost:8765`).
+The backend can run independently for headless or remote use. It always serves WebSocket on `localhost:8765` unless `--port=N` overrides it.
 
 ```bash
 # After `npm run build:backend`:
-./build/backend/signalscope-backend --test               # built-in test signal (3 tones)
+./build/backend/signalscope-backend --test               # built-in test signal (tone + chirp + pulse train)
 ./build/backend/signalscope-backend --mic --rate=48000   # microphone capture
 ./build/backend/signalscope-backend --list-devices       # enumerate capture devices
 ./build/backend/signalscope-backend --port=9000          # alternate port
 ./build/backend/signalscope-backend --fft=8192           # FFT size override
 ```
 
-Then point any browser at `ws://localhost:8765` (or open the Electron app — it'll see the existing process and connect rather than spawning its own).
+The renderer always connects to `ws://localhost:8765`. If you launch the Electron app while a backend is already on that port, Electron's own spawn fails to bind (port collision) and the renderer just attaches to the existing one — there's no port-discovery step.
 
 ### uWebSockets (optional)
 
-The backend uses [uWebSockets](https://github.com/uNetworking/uWebSockets) when available and falls back to a minimal built-in `poll()`-driven WebSocket server otherwise. **Both paths are multi-client** — the fallback uses a single-threaded event loop that tracks an arbitrary number of concurrent connections. uWebSockets is preferred in production for its lower per-connection overhead and battle-tested framing; install it via `setup.sh`.
+The backend uses [uWebSockets](https://github.com/uNetworking/uWebSockets) when available and falls back to a minimal built-in `poll()`-driven WebSocket server otherwise. **Both paths are multi-client** — the fallback uses a single-threaded event loop that tracks an arbitrary number of concurrent connections. uWebSockets is preferred in production for lower per-connection overhead; install it via `setup.sh`.
 
 To compile-test the fallback path even when uWebSockets is installed, build with `-DFORCE_SIMPLE_WS=ON`. This is also what `npm run test:backend` does internally.
 
@@ -241,7 +238,7 @@ npm run test:renderer  # JS tests via vitest
 
 **DSP pipeline**
 - **`test_peak_detect.cpp`** — gate / shape / prominence / NMS / `max_peaks` for `DSPPipeline::detect_peaks` against synthetic spectra.
-- **`test_hilbert.cpp`** — analytic-signal correctness (sign of the imaginary part, constant magnitude under sinusoidal input, +f vs -f bin dominance) — locks down the convolution-direction bug that produced a conjugated output.
+- **`test_hilbert.cpp`** — analytic-signal correctness: sign of the imaginary part, constant magnitude under sinusoidal input, +f vs -f bin dominance.
 - **`test_downconverter.cpp`** — NCO + windowed-sinc LPF + decimator: pass-through, frequency translation to DC, attenuation outside the post-decimation passband, length contracts, streaming-equals-one-shot for FIR/NCO state.
 - **`test_overlap.cpp`** — FFT window-stride overlap: slide-buffer correctness across 50/75/87.5/93.75 % factors; the overlapped path produces bit-equivalent output to a non-overlapped reference at the matching hop.
 - **`test_window_calibration.cpp`** — coherent-gain + ENBW per window; a unit-amplitude tone reads ≈ 0 dBFS regardless of window choice.
@@ -266,7 +263,6 @@ npm run test:renderer  # JS tests via vitest
 signalscope/
 ├── package.json                       # Electron + electron-builder config
 ├── setup.sh                           # System deps + vendored headers + uWS installer
-├── DESIGN.md                          # Visual design tokens (dark mode)
 ├── src/
 │   ├── main/
 │   │   ├── main.js                    # Electron main; spawns backend, dialog IPC
@@ -336,7 +332,7 @@ signalscope/
 
 **Signal processing (all backend / native)**
 - FFT sizes 256 → 65536, six window functions, per-window coherent-gain + ENBW calibration so tone amplitude stays consistent across window choices
-- **FFT overlap** — 0 / 50 / 75 / 87.5 / 93.75 % (slide-buffer-based, no extra capture); the renderer's time-axis zoom auto-promotes to higher overlap factors for Baudline-style "FFT-on-demand"
+- **FFT overlap** — 0 / 50 / 75 / 87.5 / 93.75 % (slide-buffer-based, no extra capture); the renderer's time-axis zoom auto-promotes to higher overlap factors so each visible row is its own FFT
 - **Multitaper estimator** — K ∈ {1, 2, 4, 8} orthogonal sine tapers (Riedel-Sidorenko); averages K squared FFTs for ~1/K spectrum variance
 - Linear or **logarithmic** frequency axis (decade ticks + minor stops)
 - **Peak hold** — separate trace, doesn't contaminate the spectrogram
@@ -352,7 +348,7 @@ signalscope/
 - File playback (formats listed above)
 - **Network SDR listener** — accepts a TCP publisher on a configurable port; supports U8IQ, I16IQ, F32IQ, F32Real with an optional 16-byte handshake header. Works with `hackrf_transfer | nc localhost PORT`, GNU Radio, or anything else that speaks LE samples.
 
-**Deep history (Discord/Figma model)**
+**Deep history**
 - Backend keeps a configurable ring (default 4096 rows) of full-precision dB spectrum frames
 - Renderer scrubs back in time via plain mouse wheel on a paused spectrogram; backend serves the rows on request
 - Storage decoupled from the GPU texture, so scrolling into a quiet region doesn't lose the −90 to −130 dB band
@@ -366,10 +362,9 @@ signalscope/
 - Spectrum → CSV / RAW float32
 - Waveform → WAV float32 / AIFF int16
 - Snapshot PNG (canvas grab, renderer-side because the pixels only exist there)
-- All multi-byte fields written little-endian explicitly; WAV/AIFF/RAW remain byte-compatible with the previous JS-based exporters
+- All multi-byte fields written explicitly little-endian per WAV / AIFF spec
 
 **Settings persistence**
-- ~22 UI + DSP fields mirrored to `localStorage` and replayed on reconnect via a `usePersistedState` hook
 - Versioned namespace so future schema breaks ignore stale keys instead of silently mis-decoding
 
 ## Controls
@@ -379,8 +374,8 @@ signalscope/
 |---|---|
 | Click on spectrum or spectrogram | Place f1 cursor (pink) |
 | Shift+click | Place f2 cursor (purple) |
-| Top-bar `f1` / `f2` buttons | Clear the corresponding cursor |
-| Top-bar `CLR` button | Clear both cursors |
+| Sidebar **Cursors** tab → `Clear f1` / `Clear f2` | Clear the corresponding cursor |
+| Sidebar **Cursors** tab → `Clear All` | Clear both cursors |
 
 f1/f2 are stored in absolute Hz, so they remain anchored to a real frequency even when sample rate, center frequency, frequency scale, or zoom changes.
 
@@ -388,7 +383,8 @@ f1/f2 are stored in absolute Hz, so they remain anchored to a real frequency eve
 
 | Key | Result |
 |---|---|
-| **Spacebar** | Toggle pause/play. The DSP loop keeps producing into the deep-history ring while paused, so scrubbing back stays available. |
+| **Spacebar** | Toggle pause/play. Suppressed while focus is in an input / textarea / select. |
+| Top-bar **PAUSE** / **PLAY** buttons | Same as the spacebar toggle. |
 
 ### Zoom / pan (paused only)
 
@@ -414,10 +410,6 @@ Deep-history scrolling fires a `request_history` command to the backend, which r
 | **Cursors** | f1/f2 details + Δ analysis (Δf, center, ratio, Δ bins, Δ level) |
 | **Peaks** | Detected peaks (color-matched to the circles on the spectrum), noise floor, fundamental, **Min Level** threshold (dBFS) |
 | **Input** | Source selection (test / mic / file / **listen**), sample rate, file browse, reconnect. The **Listen** mode accepts an SDR publisher over TCP — see `iq_listener.hpp` for the wire format. |
-| **Settings** | Brightness / contrast / scroll, freq scale (linear/log), Down Mixer (Tune / Decimate / Suppress Image), Equalization (none / flatten / A-weight / C-weight), FFT Overlap (0/50/75/87.5/93.75%), Multitaper K (1/2/4/8), History (depth + per-request chunk), Export buttons |
+| **Settings** | Brightness / contrast / scroll, freq scale (linear/log), Down Mixer (Tune / Decimate / Suppress Image), Equalization (none / flatten / A-weight / C-weight), FFT Overlap (0/50/75%), Multitaper K (1/2/4/8), History (depth + per-request chunk), Export buttons |
 
 Settings are mirrored to `localStorage` under the `signalscope.settings.*` namespace and replayed on reconnect — display preferences, DSP knobs, and SDR-listener fields survive reloads. Transient state (cursors, pause, view zoom, deep-history scroll position, current source mode) is deliberately not persisted.
-
-## License
-
-MIT
