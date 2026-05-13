@@ -79,11 +79,21 @@ enum class WindowFunction : uint8_t {
 // On LE hosts FrameHeader memcpys straight to the wire because the
 // field layout already matches the renderer's LE DataView reads.
 // `static_assert(sizeof == 16)` above pins the layout.
-inline std::vector<uint8_t> serialize_frame(
+
+// Serialize a frame into the caller-supplied buffer. The buffer is
+// resized to exactly `sizeof(FrameHeader) + count * sizeof(float)`,
+// but its underlying capacity is preserved across calls so a broadcast
+// loop that reuses the same destination never reallocates after warm-up.
+//
+// `dst` may alias a buffer the caller will later swap with another
+// thread; the call writes the new contents in place and returns.
+inline void serialize_frame_into(
+    std::vector<uint8_t>& dst,
     FrameType type, const float* data, std::size_t count,
     uint16_t fft_size, uint32_t frame_id, float sample_rate, uint8_t flags)
 {
-    std::vector<uint8_t> buf(sizeof(FrameHeader) + count * sizeof(float));
+    const std::size_t total = sizeof(FrameHeader) + count * sizeof(float);
+    dst.resize(total);  // never shrinks capacity
     FrameHeader header{};
     header.type        = static_cast<uint8_t>(type);
     header.version     = PROTOCOL_VERSION;
@@ -91,10 +101,22 @@ inline std::vector<uint8_t> serialize_frame(
     header.fft_size    = fft_size;
     header.frame_id    = frame_id;
     header.sample_rate = sample_rate;
-    std::memcpy(buf.data(), &header, sizeof(header));
+    std::memcpy(dst.data(), &header, sizeof(header));
     if (count > 0 && data != nullptr) {
-        std::memcpy(buf.data() + sizeof(header), data, count * sizeof(float));
+        std::memcpy(dst.data() + sizeof(header), data, count * sizeof(float));
     }
+}
+
+// Convenience wrapper kept for compatibility with existing call sites
+// and tests. Hot-path callers should prefer serialize_frame_into to
+// avoid the per-call allocation.
+inline std::vector<uint8_t> serialize_frame(
+    FrameType type, const float* data, std::size_t count,
+    uint16_t fft_size, uint32_t frame_id, float sample_rate, uint8_t flags)
+{
+    std::vector<uint8_t> buf;
+    serialize_frame_into(buf, type, data, count,
+                         fft_size, frame_id, sample_rate, flags);
     return buf;
 }
 

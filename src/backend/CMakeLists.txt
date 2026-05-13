@@ -7,6 +7,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Options
 option(ENABLE_ASAN       "Enable AddressSanitizer"                              OFF)
+option(USE_FFTW          "Enable FFTW backend (GPL — taints binary license)"   OFF)
+option(USE_KFR           "Enable KFR backend (GPL — taints binary license)"    OFF)
 option(STATIC_FFTW       "Statically link libfftw3f.a (no runtime FFTW dep)"   OFF)
 option(FORCE_SIMPLE_WS   "Use the bundled WS server even if uWebSockets exists" OFF)
 
@@ -16,8 +18,12 @@ if(WIN32)
 endif()
 
 # Sources
+# pocketfft is the default FFT backend (BSD-3, single-header, vendored).
+# FFTW and KFR sources are added conditionally further down.
 set(BACKEND_SOURCES
     main.cpp
+    dsp/fft/fft_factory.cpp
+    dsp/fft/pocketfft_backend.cpp
 )
 
 add_executable(signalscope-backend ${BACKEND_SOURCES})
@@ -39,17 +45,19 @@ target_compile_definitions(signalscope-backend PRIVATE
 # no extra target_include_directories needed. Pinned to v3.12.0 in
 # setup.sh; bump there if you need a newer release.
 
-# FFTW3 (single-precision) - required
-# Used for both real-input (r2c) and complex-IQ (c2c) FFT paths.
-# Two link modes:
-#   STATIC_FFTW=OFF (default) - dynamic link against libfftw3f.so / .dylib.
-#       Smaller backend binary; AppImage/dist users need libfftw3-single3
-#       (or equivalent) installed at runtime.
-#   STATIC_FFTW=ON           - link the static archive libfftw3f.a directly.
-#       Backend binary grows ~1MB but has zero runtime FFTW dependency,
-#       which is what you want for portable AppImage / .dmg distribution.
-#       Both .a and .so are provided by `libfftw3-dev` on Debian/Ubuntu and
-#       `brew install fftw` on macOS.
+# FFTW3 (single-precision) — optional. The project defaults to pocketfft
+# (BSD-3) which is MIT-compatible. Turning USE_FFTW=ON links libfftw3f, but
+# FFTW is GPL v2: the resulting binary inherits GPL v2 and CANNOT be
+# redistributed under MIT. STATIC_FFTW controls whether the link is static
+# (.a, no runtime dep) or dynamic (.so/.dylib, smaller binary).
+if(USE_FFTW)
+message(WARNING
+    " FFTW backend ENABLED.\n"
+    " FFTW3 is GPL v2 — linking against it forces the resulting binary to\n"
+    " be redistributed under GPL v2 (not MIT). For MIT-licensed binaries,\n"
+    " set -DUSE_FFTW=OFF (the default).")
+target_sources(signalscope-backend PRIVATE dsp/fft/fftw_backend.cpp)
+target_compile_definitions(signalscope-backend PRIVATE SIGNALSCOPE_HAVE_FFTW=1)
 if(STATIC_FFTW)
     # Restrict find_library to .a (and .lib on Windows) for this lookup
     # only; restore the global suffix list afterwards so other deps still
@@ -123,6 +131,36 @@ else()
         "fftw3f_threads not found. It ships with libfftw3-dev (Debian/Ubuntu) "
         "and brew's fftw formula. Install the same package that provided "
         "libfftw3f.")
+endif()
+endif()  # USE_FFTW
+
+# KFR (https://github.com/kfrlib/kfr) — optional, GPL v2 (binary taints, see
+# note above). Not in apt; build from source with KFR_ENABLE_DFT=ON (clang
+# enables it by default; GCC builds need the flag explicitly), then
+# `sudo cmake --install build` to a system prefix. The DFT module ships
+# a multi-arch runtime-dispatch archive whose --whole-archive link options
+# only come through KFR's installed CMake config, so we use find_package
+# instead of manual find_library.
+if(USE_KFR)
+    message(WARNING
+        " KFR backend ENABLED.\n"
+        " KFR-free is GPL v2 — the resulting binary inherits GPL v2 and\n"
+        " cannot be redistributed under MIT. Set -DUSE_KFR=OFF for MIT builds.")
+    find_package(KFR CONFIG QUIET
+        HINTS ${KFR_DIR} ${KFR_ROOT}
+        PATHS /usr/local /usr)
+    if(KFR_FOUND)
+        target_sources(signalscope-backend PRIVATE dsp/fft/kfr_backend.cpp)
+        target_link_libraries(signalscope-backend PRIVATE kfr kfr_dft)
+        target_compile_definitions(signalscope-backend PRIVATE SIGNALSCOPE_HAVE_KFR=1)
+        message(STATUS "KFR: found via CMake config")
+    else()
+        message(FATAL_ERROR
+            "USE_KFR=ON but KFR's CMake package wasn't found.\n"
+            "  Build from https://github.com/kfrlib/kfr with KFR_ENABLE_DFT=ON\n"
+            "  (use clang to get this by default), `sudo cmake --install build`,\n"
+            "  and re-run; or pass -DKFR_DIR=<dir-with-KFRConfig.cmake>.")
+    endif()
 endif()
 
 # uWebSockets (optional - falls back to built-in WS server)

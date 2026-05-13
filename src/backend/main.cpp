@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fftw3.h>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -42,6 +41,7 @@
 #include "protocol/protocol.hpp"
 #include "protocol/ws_framing.hpp"
 #include "util/ring_buffer.hpp"
+#include "dsp/fft/fft_backend.hpp"
 #include "dsp/dsp_pipeline.hpp"
 #include "dsp/downconverter.hpp"
 #include "dsp/hilbert.hpp"
@@ -56,76 +56,24 @@ using json = nlohmann::json;
 
 namespace signalscope
 {
-    // FFTW wisdom — cache hand-tuned plans for common sizes so
-    // set_fft_size is instant after warm-up. Without wisdom,
-    // FFTW_MEASURE on N=32768 takes seconds. The set_fft_size path
-    // tries FFTW_WISDOM_ONLY first, then FFTW_ESTIMATE, so the UI
-    // never blocks even on a cold machine.
-
-    // Empty if $HOME isn't set. Creates the parent directory.
-    static std::string wisdom_file_path() {
-        const char *home = std::getenv("HOME");
-        if (!home || !*home) return {};
-        std::filesystem::path p =
-            std::filesystem::path(home) / ".cache" / "signalscope" / "fftw-wisdom";
-        std::error_code ec;
-        std::filesystem::create_directories(p.parent_path(), ec);
-        return p.string();
-    }
-
-    // Sizes the warm-up thread populates wisdom for. Ordered smallest ->
-    // largest so cheap sizes complete fast and the user sees responsive
-    // behavior even if they change FFT size mid-warm-up.
+    // Common FFT sizes for the background warmup pass. Pocketfft is a no-op
+    // here (no plans to cache); FFTW uses these to populate wisdom so
+    // set_fft_size never blocks on a cold machine.
     static const std::array<size_t, 9> WARMUP_FFT_SIZES = {
         256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536
     };
 
-    // Background warm-up: for each common size, call FFTW_MEASURE to
-    // populate wisdom and save it. Skips sizes already cached. Runs
-    // until the AppState's running flag flips false (graceful shutdown).
-    static void fft_warmup_thread(std::atomic<bool> &running,
-                                  std::string wisdom_path)
-    {
-        for (size_t n : WARMUP_FFT_SIZES) {
-            if (!running.load(std::memory_order_relaxed)) return;
+    // Used as the warmup cancellation predicate. Set by main() before the
+    // warmup thread starts; read from the warmup thread.
+    static std::atomic<bool> *g_warmup_running = nullptr;
+    static bool warmup_should_cancel() {
+        return !g_warmup_running ||
+               !g_warmup_running->load(std::memory_order_relaxed);
+    }
 
-            // r2c (real -> half-complex)
-            float *in_r = fftwf_alloc_real(n);
-            fftwf_complex *out_r = fftwf_alloc_complex(n / 2 + 1);
-            fftwf_plan p = fftwf_plan_dft_r2c_1d(
-                static_cast<int>(n), in_r, out_r,
-                FFTW_MEASURE | FFTW_WISDOM_ONLY);
-            if (!p) {
-                p = fftwf_plan_dft_r2c_1d(
-                    static_cast<int>(n), in_r, out_r, FFTW_MEASURE);
-                if (p && !wisdom_path.empty()) {
-                    fftwf_export_wisdom_to_filename(wisdom_path.c_str());
-                }
-            }
-            if (p) fftwf_destroy_plan(p);
-            fftwf_free(in_r);
-            fftwf_free(out_r);
-
-            if (!running.load(std::memory_order_relaxed)) return;
-
-            // c2c (complex -> complex, used by the IQ / DDC paths)
-            fftwf_complex *in_c = fftwf_alloc_complex(n);
-            fftwf_complex *out_c = fftwf_alloc_complex(n);
-            fftwf_plan pc = fftwf_plan_dft_1d(
-                static_cast<int>(n), in_c, out_c,
-                FFTW_FORWARD, FFTW_MEASURE | FFTW_WISDOM_ONLY);
-            if (!pc) {
-                pc = fftwf_plan_dft_1d(
-                    static_cast<int>(n), in_c, out_c,
-                    FFTW_FORWARD, FFTW_MEASURE);
-                if (pc && !wisdom_path.empty()) {
-                    fftwf_export_wisdom_to_filename(wisdom_path.c_str());
-                }
-            }
-            if (pc) fftwf_destroy_plan(pc);
-            fftwf_free(in_c);
-            fftwf_free(out_c);
-        }
+    static void fft_warmup_thread() {
+        ss::fft::warmup(std::span<const size_t>(WARMUP_FFT_SIZES),
+                        warmup_should_cancel);
     }
 
     struct AppState
@@ -218,6 +166,11 @@ namespace signalscope
             // request_history handler and drained by the WS send loop
             // on the next frame_ready cycle.
             std::vector<std::vector<uint8_t>> history;
+            // Retired history-row buffers — refilled in place by the
+            // request_history handler so each batch of historical frames
+            // doesn't trigger N fresh allocations. Same locking contract
+            // as the other OutputFrames members.
+            std::vector<std::vector<uint8_t>> history_pool;
             std::atomic<bool> ready{false};
         };
         OutputFrames outputs;
@@ -335,6 +288,11 @@ namespace signalscope
             iq_im.resize(hop_size);
 
             // Pull samples from ring buffer or generate test signal.
+            // Reads are gated on available() so partial chunks accumulate
+            // in the ring instead of being consumed and discarded — at
+            // large FFT sizes (e.g. 32768) the file source pumps in
+            // smaller blocks than the FFT needs, so reading "what's
+            // there" would burn samples and never produce a frame.
             size_t got = 0;
             {
                 std::lock_guard<std::mutex> lock(state.source_mutex);
@@ -354,9 +312,11 @@ namespace signalscope
                     // File source pushes interleaved I,Q,I,Q, ... so we need
                     // 2*needed floats to fill a (possibly oversampled) block.
                     scratch.interleaved.resize(needed * 2);
-                    size_t got_floats = state.capture_buffer.read(
-                        scratch.interleaved.data(), needed * 2);
-                    got = got_floats / 2;
+                    if (state.capture_buffer.available() >= needed * 2) {
+                        const size_t got_floats = state.capture_buffer.read(
+                            scratch.interleaved.data(), needed * 2);
+                        got = got_floats / 2;
+                    }
                     scratch.raw_iq_re.resize(needed);
                     scratch.raw_iq_im.resize(needed);
                     for (size_t i = 0; i < got; i++) {
@@ -370,8 +330,10 @@ namespace signalscope
                 }
                 else
                 {
-                    got = state.capture_buffer.read(
-                        input_buffer.data(), needed);
+                    if (state.capture_buffer.available() >= needed) {
+                        got = state.capture_buffer.read(
+                            input_buffer.data(), needed);
+                    }
                 }
             }
 
@@ -585,92 +547,94 @@ namespace signalscope
             // current band; waveform/histogram/IQ also reference effective_sr
             // because after decimation they describe the baseband, not the
             // raw input.
-            auto spec_frame = serialize_frame(
-                FrameType::Spectrum, spectrum_vec.data(), spectrum_vec.size(),
-                static_cast<uint16_t>(fft_size), frame_id,
-                effective_sr, spec_flags);
-
-            // Capture into the deep-history ring. The renderer's GPU
-            // texture only holds the recent working set; this ring is
-            // what the user pans into when they pause and scroll back.
-            // Captured AFTER weighting/peak-hold so historical rows match
-            // exactly what was on screen at the time.
-            state.history.push(spectrum_vec, effective_sr, spec_flags);
-
-            // Peak-hold trace is sent as its own frame so the spectrogram
-            // (which uses the live Spectrum frame) is unaffected. Only emitted
-            // when hold is on.
-            std::vector<uint8_t> hold_frame;
-            if (peak_hold_active) {
-                hold_frame = serialize_frame(
-                    FrameType::SpectrumHold, hold_vec.data(), hold_vec.size(),
-                    static_cast<uint16_t>(fft_size), frame_id,
-                    effective_sr, spec_flags);
-            }
-
-            // Waveform shows the most recent samples. With overlap engaged
-            // input_buffer holds only one hop, so wave_len caps at hop_size.
-            size_t wave_len = std::min<size_t>(hop_size, 1024);
-            auto wave_frame = serialize_frame(
-                FrameType::Waveform,
-                input_buffer.data() + (hop_size - wave_len), wave_len,
-                static_cast<uint16_t>(fft_size), frame_id,
-                effective_sr, flags);
-
-            auto phase_frame = serialize_frame(
-                FrameType::Phase, phase_vec.data(), phase_vec.size(),
-                static_cast<uint16_t>(fft_size), frame_id,
-                effective_sr, spec_flags);
-
-            auto hist_frame = serialize_frame(
-                FrameType::Histogram, histogram_vec.data(), histogram_vec.size(),
-                static_cast<uint16_t>(fft_size), frame_id,
-                effective_sr, flags);
-
-            auto iq_frame = serialize_frame(
-                FrameType::IQ, iq_data.data(), iq_data.size(),
-                static_cast<uint16_t>(fft_size), frame_id,
-                effective_sr, flags);
-
-            // Source-status frame: report the EFFECTIVE complex flag and
-            // EFFECTIVE center frequency so axis labels use absolute Hz.
-            // (loop_count + source_mode are descriptive of the source side.)
-            float status_payload[4] = {
-                static_cast<float>(state.file_source.loop_count()),
-                state.source_mode == "file"   ? 2.0f
-                    : state.source_mode == "mic"    ? 1.0f
-                    : state.source_mode == "listen" ? 3.0f
-                    : 0.0f,
-                source_complex ? 1.0f : 0.0f,
-                effective_cf,
-            };
-            // Push the latest loop count back into AppState so other
-            // threads/observers can read it without going through the renderer.
-            state.source_loop_count.store(
-                static_cast<size_t>(status_payload[0]),
-                std::memory_order_relaxed);
-            auto status_frame = serialize_frame(
-                FrameType::SourceStatus, status_payload, 4,
-                static_cast<uint16_t>(fft_size), frame_id,
-                effective_sr, flags);
-
-            auto stats_frame = serialize_frame(
-                FrameType::SpectrumStats,
-                stats_payload.data(), stats_payload.size(),
-                static_cast<uint16_t>(fft_size), frame_id,
-                effective_sr, spec_flags);
-
-            // Store for WebSocket thread to send
+            //
+            // We serialize directly into the OutputFrames buffers (under the
+            // mutex) so the hot path doesn't allocate after warm-up. The WS
+            // thread swaps these buffers out under the same mutex.
             {
                 std::lock_guard<std::mutex> lock(state.outputs.mu);
-                state.outputs.spec = std::move(spec_frame);
-                state.outputs.hold = std::move(hold_frame);
-                state.outputs.wave = std::move(wave_frame);
-                state.outputs.phase = std::move(phase_frame);
-                state.outputs.hist = std::move(hist_frame);
-                state.outputs.iq = std::move(iq_frame);
-                state.outputs.status = std::move(status_frame);
-                state.outputs.stats = std::move(stats_frame);
+
+                serialize_frame_into(
+                    state.outputs.spec,
+                    FrameType::Spectrum, spectrum_vec.data(), spectrum_vec.size(),
+                    static_cast<uint16_t>(fft_size), frame_id,
+                    effective_sr, spec_flags);
+
+                // Capture into the deep-history ring. The renderer's GPU
+                // texture only holds the recent working set; this ring is
+                // what the user pans into when they pause and scroll back.
+                // Captured AFTER weighting/peak-hold so historical rows match
+                // exactly what was on screen at the time.
+                state.history.push(spectrum_vec, effective_sr, spec_flags);
+
+                // Peak-hold trace as its own frame so the spectrogram (which
+                // uses the live Spectrum frame) is unaffected. We clear when
+                // hold is off so an empty buffer signals "skip" downstream.
+                if (peak_hold_active) {
+                    serialize_frame_into(
+                        state.outputs.hold,
+                        FrameType::SpectrumHold, hold_vec.data(), hold_vec.size(),
+                        static_cast<uint16_t>(fft_size), frame_id,
+                        effective_sr, spec_flags);
+                } else {
+                    state.outputs.hold.clear();
+                }
+
+                // Waveform shows the most recent samples. With overlap engaged
+                // input_buffer holds only one hop, so wave_len caps at hop_size.
+                size_t wave_len = std::min<size_t>(hop_size, 1024);
+                serialize_frame_into(
+                    state.outputs.wave,
+                    FrameType::Waveform,
+                    input_buffer.data() + (hop_size - wave_len), wave_len,
+                    static_cast<uint16_t>(fft_size), frame_id,
+                    effective_sr, flags);
+
+                serialize_frame_into(
+                    state.outputs.phase,
+                    FrameType::Phase, phase_vec.data(), phase_vec.size(),
+                    static_cast<uint16_t>(fft_size), frame_id,
+                    effective_sr, spec_flags);
+
+                serialize_frame_into(
+                    state.outputs.hist,
+                    FrameType::Histogram, histogram_vec.data(), histogram_vec.size(),
+                    static_cast<uint16_t>(fft_size), frame_id,
+                    effective_sr, flags);
+
+                serialize_frame_into(
+                    state.outputs.iq,
+                    FrameType::IQ, iq_data.data(), iq_data.size(),
+                    static_cast<uint16_t>(fft_size), frame_id,
+                    effective_sr, flags);
+
+                // Source-status frame: report the EFFECTIVE complex flag and
+                // EFFECTIVE center frequency so axis labels use absolute Hz.
+                float status_payload[4] = {
+                    static_cast<float>(state.file_source.loop_count()),
+                    state.source_mode == "file"   ? 2.0f
+                        : state.source_mode == "mic"    ? 1.0f
+                        : state.source_mode == "listen" ? 3.0f
+                        : 0.0f,
+                    source_complex ? 1.0f : 0.0f,
+                    effective_cf,
+                };
+                state.source_loop_count.store(
+                    static_cast<size_t>(status_payload[0]),
+                    std::memory_order_relaxed);
+                serialize_frame_into(
+                    state.outputs.status,
+                    FrameType::SourceStatus, status_payload, 4,
+                    static_cast<uint16_t>(fft_size), frame_id,
+                    effective_sr, flags);
+
+                serialize_frame_into(
+                    state.outputs.stats,
+                    FrameType::SpectrumStats,
+                    stats_payload.data(), stats_payload.size(),
+                    static_cast<uint16_t>(fft_size), frame_id,
+                    effective_sr, spec_flags);
+
                 state.outputs.ready.store(true, std::memory_order_release);
             }
 
@@ -763,11 +727,19 @@ namespace signalscope
         std::lock_guard<std::mutex> lock(state.outputs.mu);
         for (std::size_t i = 0; i < rows.size(); i++) {
             const auto& r = rows[i];
-            state.outputs.history.push_back(serialize_frame(
+            // Reuse a retired row buffer when one is available.
+            std::vector<uint8_t> row_buf;
+            if (!state.outputs.history_pool.empty()) {
+                row_buf = std::move(state.outputs.history_pool.back());
+                state.outputs.history_pool.pop_back();
+            }
+            serialize_frame_into(
+                row_buf,
                 FrameType::HistoryRow, r.dB.data(), r.dB.size(),
                 r.fft_size,
                 static_cast<uint32_t>(start + i),
-                r.sample_rate, r.flags));
+                r.sample_rate, r.flags);
+            state.outputs.history.push_back(std::move(row_buf));
         }
         state.outputs.ready.store(true, std::memory_order_release);
     }
@@ -825,6 +797,11 @@ namespace signalscope
         else if (pct >= 50) factor = 2;
         std::lock_guard<std::mutex> lock(state.dsp_mutex);
         state.dsp.set_overlap(factor);
+    }
+    static void set_replay_speed(AppState& state, const json& j) {
+        // No mutex — FileSource keeps its own atomic speed and the
+        // worker thread reads it on each chunk-pacing tick.
+        state.file_source.set_replay_speed(j.value("value", 1.0f));
     }
     static void set_weighting(AppState& state, const json& j) {
         const std::string v = j.value("value", std::string{"none"});
@@ -1032,6 +1009,7 @@ namespace signalscope
             {"export_capture",           &cmd::export_capture},
             {"set_taper_count",          &cmd::set_taper_count},
             {"set_overlap",              &cmd::set_overlap},
+            {"set_replay_speed",         &cmd::set_replay_speed},
             {"set_weighting",            &cmd::set_weighting},
             {"set_suppress_image",       &cmd::set_suppress_image},
             {"set_tune_offset",          &cmd::set_tune_offset},
@@ -1150,14 +1128,19 @@ namespace signalscope
                 std::vector<std::vector<uint8_t>> history;
                 {
                     std::lock_guard<std::mutex> lock(s->outputs.mu);
-                    spec   = s->outputs.spec;
-                    hold   = s->outputs.hold;
-                    wave   = s->outputs.wave;
-                    phase  = s->outputs.phase;
-                    hist   = s->outputs.hist;
-                    iq     = s->outputs.iq;
-                    status = s->outputs.status;
-                    stats  = s->outputs.stats;
+                    // Swap rather than copy. The WS-thread locals retain the
+                    // DSP-thread buffers we just claimed; on the next DSP
+                    // cycle, the DSP thread writes into the buffers we hand
+                    // back (already sized from last time), so steady-state
+                    // allocations on this path are zero.
+                    std::swap(spec,   s->outputs.spec);
+                    std::swap(hold,   s->outputs.hold);
+                    std::swap(wave,   s->outputs.wave);
+                    std::swap(phase,  s->outputs.phase);
+                    std::swap(hist,   s->outputs.hist);
+                    std::swap(iq,     s->outputs.iq);
+                    std::swap(status, s->outputs.status);
+                    std::swap(stats,  s->outputs.stats);
                     history = std::move(s->outputs.history);
                     s->outputs.history.clear();
                     s->outputs.ready.store(false, std::memory_order_release);
@@ -1187,6 +1170,23 @@ namespace signalscope
                         if (!send_frame(row)) { ok = false; break; }
                     }
                     if (!ok) continue;
+                }
+
+                // Recycle the row buffers we just sent. They go back under
+                // the same mutex that the request_history handler will pull
+                // from on its next invocation.
+                if (!history.empty()) {
+                    std::lock_guard<std::mutex> lock(s->outputs.mu);
+                    // Cap the pool. historyCapacity is 4096 rows by default;
+                    // 64 retired buffers handles every normal request size
+                    // without retaining the worst-case batch forever.
+                    constexpr std::size_t kHistoryPoolMax = 64;
+                    for (auto& row : history) {
+                        if (s->outputs.history_pool.size() < kHistoryPoolMax) {
+                            s->outputs.history_pool.push_back(std::move(row));
+                        }
+                    }
+                    history.clear();
                 }
             } catch (...) {}
         }, 16, 16); // ~60 fps
@@ -1393,14 +1393,19 @@ if (!clients.empty() &&
                 std::vector<std::vector<uint8_t>> history;
                 {
                     std::lock_guard<std::mutex> lock(state.outputs.mu);
-                    spec   = state.outputs.spec;
-                    hold   = state.outputs.hold;
-                    wave   = state.outputs.wave;
-                    phase  = state.outputs.phase;
-                    hist   = state.outputs.hist;
-                    iq     = state.outputs.iq;
-                    status = state.outputs.status;
-                    stats  = state.outputs.stats;
+                    // Swap rather than copy. The WS-thread locals retain the
+                    // DSP-thread buffers we just claimed; on the next DSP
+                    // cycle, the DSP thread writes into the buffers we hand
+                    // back (already sized from last time), so steady-state
+                    // allocations on this path are zero.
+                    std::swap(spec,   state.outputs.spec);
+                    std::swap(hold,   state.outputs.hold);
+                    std::swap(wave,   state.outputs.wave);
+                    std::swap(phase,  state.outputs.phase);
+                    std::swap(hist,   state.outputs.hist);
+                    std::swap(iq,     state.outputs.iq);
+                    std::swap(status, state.outputs.status);
+                    std::swap(stats,  state.outputs.stats);
                     history = std::move(state.outputs.history);
                     state.outputs.history.clear();
                     state.outputs.ready.store(false, std::memory_order_release);
@@ -1432,6 +1437,23 @@ if (!clients.empty() &&
                         ++i;
                     }
                 }
+
+                // Recycle the row buffers we just sent. They go back under
+                // the same mutex that the request_history handler will pull
+                // from on its next invocation.
+                if (!history.empty()) {
+                    std::lock_guard<std::mutex> lock(state.outputs.mu);
+                    // Cap the pool. historyCapacity is 4096 rows by default;
+                    // 64 retired buffers handles every normal request size
+                    // without retaining the worst-case batch forever.
+                    constexpr std::size_t kHistoryPoolMax = 64;
+                    for (auto& row : history) {
+                        if (state.outputs.history_pool.size() < kHistoryPoolMax) {
+                            state.outputs.history_pool.push_back(std::move(row));
+                        }
+                    }
+                    history.clear();
+                }
             }
         }
 
@@ -1457,15 +1479,19 @@ static void signal_handler(int sig)
 
 int main(int argc, char *argv[])
 {
-    // FFTW setup must happen BEFORE AppState constructs the DSPPipeline,
-    // since the pipeline's constructor immediately creates plans for the
-    // default FFT size. Loading wisdom up-front means even that first
-    // plan can hit the cache on a warmed machine.
-    fftwf_make_planner_thread_safe();
-    const std::string wisdom_path = signalscope::wisdom_file_path();
-    if (!wisdom_path.empty()) {
-        fftwf_import_wisdom_from_filename(wisdom_path.c_str());
+    // FFT backend selection must happen BEFORE AppState constructs the
+    // DSPPipeline, since the pipeline's constructor calls make_backend().
+    // Resolution order: --fft-backend= flag > SS_FFT_BACKEND env > default.
+    std::string fft_pref;
+    for (int i = 1; i < argc; i++) {
+        std::string arg(argv[i]);
+        if (arg.starts_with("--fft-backend=")) {
+            fft_pref = arg.substr(std::string_view("--fft-backend=").size());
+            break;
+        }
     }
+    ss::fft::initialize(fft_pref);
+    ss::fft::global_startup();
 
     signalscope::AppState state;
     g_state = &state;
@@ -1497,6 +1523,10 @@ int main(int argc, char *argv[])
             state.sample_rate = std::stof(arg.substr(7));
             state.dsp.set_sample_rate(state.sample_rate);
         }
+        else if (arg.starts_with("--fft-backend="))
+        {
+            // Already consumed by the pre-pass before AppState was built.
+        }
         else if (arg == "--list-devices")
         {
             auto devices = signalscope::AudioCapture::enumerate_devices();
@@ -1512,13 +1542,15 @@ int main(int argc, char *argv[])
         {
             std::cout
                 << "signalscope-backend [options]\n\n"
-                << "  --port=N          WebSocket port (default: 8765)\n"
-                << "  --test            Use test signal generator\n"
-                << "  --mic             Use microphone capture\n"
-                << "  --fft=N           FFT size (default: 4096)\n"
-                << "  --rate=N          Sample rate (default: 48000)\n"
-                << "  --list-devices    List audio capture devices\n"
-                << "  -h, --help        Show this help\n";
+                << "  --port=N           WebSocket port (default: 8765)\n"
+                << "  --test             Use test signal generator\n"
+                << "  --mic              Use microphone capture\n"
+                << "  --fft=N            FFT size (default: 4096)\n"
+                << "  --rate=N           Sample rate (default: 48000)\n"
+                << "  --fft-backend=NAME FFT backend: pocketfft (default), fftw, kfr.\n"
+                << "                     SS_FFT_BACKEND env var also accepted.\n"
+                << "  --list-devices     List audio capture devices\n"
+                << "  -h, --help         Show this help\n";
             return 0;
         }
     }
@@ -1528,6 +1560,7 @@ int main(int argc, char *argv[])
 
     std::cout << "SignalScope Backend v0.2.0\n"
               << "  FFT size:    " << state.dsp.config().fft_size << '\n'
+              << "  FFT backend: " << ss::fft::active_name() << '\n'
               << "  Sample rate: " << state.sample_rate << " Hz\n"
               << "  Source:      " << state.source_mode << '\n'
               << "  WS port:     " << state.ws_port << std::endl;
@@ -1556,14 +1589,11 @@ int main(int argc, char *argv[])
 
     std::thread dsp(signalscope::dsp_thread_func, std::ref(state));
 
-    // Background wisdom warm-up so set_fft_size never freezes the UI.
-    // Skipped when we couldn't determine a wisdom path (no $HOME).
-    std::thread fft_warmup;
-    if (!wisdom_path.empty()) {
-        fft_warmup = std::thread(
-            signalscope::fft_warmup_thread,
-            std::ref(state.running), wisdom_path);
-    }
+    // Background backend warmup. Pocketfft / KFR are no-ops; FFTW
+    // populates wisdom for the common sizes so set_fft_size never
+    // freezes the UI on a cold machine.
+    signalscope::g_warmup_running = &state.running;
+    std::thread fft_warmup(signalscope::fft_warmup_thread);
 
     // WS server runs on the main thread (owns its own event loop).
     signalscope::ws_thread_func(state);
@@ -1572,6 +1602,8 @@ int main(int argc, char *argv[])
     dsp.join();
     if (fft_warmup.joinable()) fft_warmup.join();
     state.audio.stop();
+
+    ss::fft::global_shutdown();
 
     std::cout << "SignalScope Backend shutdown complete" << std::endl;
     return 0;

@@ -14,7 +14,7 @@ A browser-class signal analyzer with a native C++ DSP backend, packaged as a sin
 │  │  Sources         SPSC ring        DSP pipeline                   │    │
 │  │  ──────────────  ─────────────    ─────────────────────────────  │    │
 │  │  miniaudio mic   1M floats        Hilbert? → DDC? → window       │    │
-│  │  file decoders   (~21s @ 48kHz)   → FFTW (overlap, multitaper)   │    │
+│  │  file decoders   (~21s @ 48kHz)   → FFT (overlap, multitaper)    │    │
 │  │  test signal     drop-oldest      → A/C-weight? → peak detect    │    │
 │  │  TCP IQ listener overflow         → noise floor + fundamental    │    │
 │  │                                   → spec_min/max for auto-range  │    │
@@ -45,7 +45,7 @@ The backend runs as its own native process spawned by Electron's main. The rende
 ### Three-thread backend pipeline
 
 1. **Capture thread** — miniaudio callback (mic) or `FileSource` worker writes into a lock-free SPSC ring buffer. Never blocks; producer-side allocations are amortized to startup.
-2. **DSP thread** — pulls samples, optionally runs the Hilbert pre-stage and DDC (mixer + FIR low-pass + decimator), applies a window (Hanning/Hamming/Blackman/FlatTop/Kaiser/Rectangular), runs FFTW (`r2c` for real input, `c2c` for complex) with configurable overlap and optional K-taper multitaper averaging, produces dBFS magnitude + phase, then runs the spectrum analytics: A/C-weighting (optional), peak picking, noise-floor estimate, fundamental detection, `spec_min`/`spec_max` for the renderer's Flatten auto-range, and a push into the deep-history ring. Optional peak-hold side buffer is updated when enabled.
+2. **DSP thread** — pulls samples, optionally runs the Hilbert pre-stage and DDC (mixer + FIR low-pass + decimator), applies a window (Hanning/Hamming/Blackman/FlatTop/Kaiser/Rectangular), runs the FFT (`r2c` for real input, `c2c` for complex) with configurable overlap and optional K-taper multitaper averaging, produces dBFS magnitude + phase, then runs the spectrum analytics: A/C-weighting (optional), peak picking, noise-floor estimate, fundamental detection, `spec_min`/`spec_max` for the renderer's Flatten auto-range, and a push into the deep-history ring. Optional peak-hold side buffer is updated when enabled. The FFT implementation is pluggable — see [FFT backends](#fft-backends).
 3. **WebSocket thread** — broadcasts serialized binary frames to every connected renderer at the engine target rate (60 fps default). Drains the deep-history response queue alongside the live frames.
 
 A separate **listener thread** runs when source = `listen`: a TCP server accepts a single SDR publisher, decodes its samples (U8IQ / I16IQ / F32IQ / F32Real, all little-endian on the wire), and writes them straight into the capture ring buffer. See [`source/iq_listener.hpp`](src/backend/source/iq_listener.hpp).
@@ -122,35 +122,59 @@ npm run dev:ui         # same, but with NODE_ENV=development
 
 - **Node 22+** and **npm**
 - **CMake 3.20+**, a **C++20 compiler** (g++ 13 / clang 16 / MSVC 2022)
-- **fftw3f** (single-precision FFTW) — `libfftw3-dev` on Debian/Ubuntu, `brew install fftw` on macOS
 - Linux audio: ALSA (`libasound2-dev`) and PulseAudio (`libpulse-dev`)
 - macOS / Windows audio works out of the box (CoreAudio / WASAPI via miniaudio)
+- *(Optional)* FFTW3 — only needed if you opt into the FFTW backend; see [FFT backends](#fft-backends)
 
-`setup.sh` installs the system packages via `apt` if you accept the prompt, downloads the vendored single-header dependencies (nlohmann/json v3.12.0 and miniaudio 0.11.21) into `src/backend/third_party/`, optionally builds + installs uWebSockets from source, and `npm install`s the renderer deps.
+`setup.sh` installs the system packages via `apt` if you accept the prompt, downloads the vendored single-header dependencies (nlohmann/json v3.12.0, miniaudio 0.11.21, and pocketfft) into `src/backend/third_party/`, optionally builds + installs uWebSockets from source, and `npm install`s the renderer deps.
+
+### FFT backends
+
+The DSP pipeline talks to FFT through a small `IFftBackend` interface so the implementation is swappable. Three backends are available:
+
+| Backend     | License        | Default? | CMake flag                  | Notes                                                                                  |
+| ----------- | -------------- | -------- | --------------------------- | -------------------------------------------------------------------------------------- |
+| pocketfft   | BSD-3-Clause   | ✅       | always compiled             | Header-only (vendored). MIT-compatible. Zero runtime dependency.                       |
+| FFTW3       | GPL v2 / paid  | off      | `-DUSE_FFTW=ON`             | Fastest on x86. **Links GPL into the binary** — incompatible with MIT redistribution. |
+| KFR         | GPL v2 / paid  | off      | `-DUSE_KFR=ON`              | Modern SIMD library. Same GPL caveat as FFTW.                                          |
+
+**Default at runtime:** the highest-priority backend the build was compiled with — KFR if `-DUSE_KFR=ON` was passed, otherwise FFTW if `-DUSE_FFTW=ON`, otherwise pocketfft. The reasoning: enabling an optional backend at build time is a deliberate signal that you want it active, not a "just compile it in case" toggle.
+
+**Override at runtime:** `--fft-backend=pocketfft|fftw|kfr` or `SS_FFT_BACKEND=…` env var (CLI flag wins). Requesting a backend that isn't compiled in logs a warning and falls back to pocketfft.
+
+**Licensing matters for shipped binaries.** The project source is MIT regardless of CMake flags, but linking against FFTW or KFR pulls GPL into the executable. The `npm run dist:*` scripts deliberately do not enable either, so the artifacts in `release/` stay MIT-clean. Enable the optional backends only for local benchmarking, or accept that any redistributed binary inherits GPL v2.
 
 ## Building for Distribution
 
 Each command produces a single distributable file:
 
 ```bash
-npm run dist:linux     # → release/SignalScope-0.2.0-shared.AppImage
-npm run dist:win       # → release/SignalScope-0.2.0-portable-shared.exe
-npm run dist:mac       # → release/SignalScope-0.2.0-shared.dmg
+npm run dist:linux     # → release/SignalScope-0.2.0-pocketfft.AppImage
+npm run dist:win       # → release/SignalScope-0.2.0-portable-pocketfft.exe
+npm run dist:mac       # → release/SignalScope-0.2.0-pocketfft.dmg
 ```
 
-The `shared` suffix marks the FFTW link mode (dynamic). The `:static` variants land with `-static` in the filename, so both can coexist in `release/` without clobbering each other. Each `dist:*` script rebuilds the backend and renderer first, so you never accidentally ship a stale binary.
+The default `dist:*` scripts build with pocketfft (MIT-compatible, no runtime FFT dependency). Three opt-in variants exist for each platform — they produce GPL-licensed binaries because of the chosen FFT library and are not redistributable under MIT:
+
+```bash
+npm run dist:linux:fftw          # → SignalScope-0.2.0-fftw.AppImage         (GPL, libfftw3f at runtime)
+npm run dist:linux:fftw-static   # → SignalScope-0.2.0-fftw-static.AppImage  (GPL, no runtime FFTW dep)
+npm run dist:linux:kfr           # → SignalScope-0.2.0-kfr.AppImage          (GPL, libkfr_dft at runtime)
+```
+
+Same `:fftw`, `:fftw-static`, `:kfr` suffixes exist for `dist:win` and `dist:mac`. The FFT backend name is encoded in every artifact filename so you can tell at a glance which library you're shipping. See [FFT backends](#fft-backends) for the licensing rationale. Each `dist:*` script rebuilds the backend and renderer first, so you never accidentally ship a stale binary.
 
 ### CPack tarballs (optional)
 
 For distribution channels that prefer a versioned `.tar.gz` (or `.zip` on Windows) containing the app plus sibling docs, wrap the AppImage with CPack:
 
 ```bash
-npm run pack:linux            # → release/signalscope-0.2.0-Linux-shared.tar.gz
-npm run pack:linux:static     # → release/signalscope-0.2.0-Linux-static.tar.gz
-npm run pack:win              # → release/signalscope-0.2.0-Windows-shared.zip
-npm run pack:win:static       # → release/signalscope-0.2.0-Windows-static.zip
-npm run pack:mac              # → release/signalscope-0.2.0-Darwin-shared.tar.gz
-npm run pack:mac:static       # → release/signalscope-0.2.0-Darwin-static.tar.gz
+npm run pack:linux             # → release/signalscope-0.2.0-Linux-pocketfft.tar.gz
+npm run pack:linux:fftw        # → release/signalscope-0.2.0-Linux-fftw.tar.gz          (GPL)
+npm run pack:linux:fftw-static # → release/signalscope-0.2.0-Linux-fftw-static.tar.gz   (GPL)
+npm run pack:linux:kfr         # → release/signalscope-0.2.0-Linux-kfr.tar.gz           (GPL)
+npm run pack:win               # → release/signalscope-0.2.0-Windows-pocketfft.zip
+npm run pack:mac               # → release/signalscope-0.2.0-Darwin-pocketfft.tar.gz
 ```
 
 Each `pack:*` script chains the corresponding `dist:*` (which builds backend + UI and runs electron-builder), then runs CPack via [packaging/CMakeLists.txt](packaging/CMakeLists.txt) to bundle the AppImage / DMG / EXE with `README.md` at the archive root. CPack doesn't replace electron-builder — it wraps electron-builder's output for transport.
@@ -159,44 +183,12 @@ To add more sibling files to the tarball (sample SigMF captures, a launcher scri
 
 ### Runtime dependencies of the distributable
 
-The built artifact bundles Electron + Chromium + the SignalScope code, but the C++ backend dynamically links against a few system libraries. End users need:
+The built artifact bundles Electron + Chromium + the SignalScope code. The default backend uses pocketfft (vendored, header-only), so end users need only:
 
-- **`libfftw3f` (single-precision FFTW)** — the gotcha. Most distros ship `libfftw3-3` (double-precision) by default but **not** `libfftw3f`. Without it the backend fails to launch with `error while loading shared libraries: libfftw3f.so.3`.
-  - Debian/Ubuntu: `sudo apt install libfftw3-single3`
-  - Fedora: `sudo dnf install fftw-libs-single`
-  - macOS: `brew install fftw`
 - **ALSA / PulseAudio** (Linux audio capture) — `libasound2`, `libpulse0`. Present on essentially every desktop Linux.
 - **Standard Electron/Chromium libs** — `libnss3`, `libgtk-3-0`, etc. Already part of every desktop install.
 
-If shipping to users who can't or won't install `libfftw3f`, build the **static** variant below.
-
-### Static FFTW build (no runtime FFTW dependency)
-
-The default build dynamically links FFTW (smaller binary, requires `libfftw3f` at runtime). For portable distributables — AppImage / DMG / portable EXE that should run on a fresh machine without extra `apt` calls — link FFTW statically:
-
-```bash
-# Standalone backend build with the static archive
-npm run build:backend:static
-
-# Or go straight to a self-contained installer:
-npm run dist:linux:static     # → release/SignalScope-0.2.0-static.AppImage
-npm run dist:win:static       # → release/SignalScope-0.2.0-portable-static.exe
-npm run dist:mac:static       # → release/SignalScope-0.2.0-static.dmg
-
-# CPack-wrapped equivalents:
-npm run pack:linux:static     # → release/signalscope-0.2.0-Linux-static.tar.gz
-npm run pack:win:static       # → release/signalscope-0.2.0-Windows-static.zip
-npm run pack:mac:static       # → release/signalscope-0.2.0-Darwin-static.tar.gz
-```
-
-Equivalent CMake invocation if you're working outside npm:
-
-```bash
-cmake -B build/backend -S src/backend -DSTATIC_FFTW=ON
-cmake --build build/backend --config Release
-```
-
-The static archive (`libfftw3f.a`) ships alongside the `.so` in `libfftw3-dev` on Debian/Ubuntu and `brew install fftw` on macOS, so no extra setup is needed on the **build** machine. The resulting backend binary is ~1 MB larger but has no runtime FFTW dependency.
+If you ship a `:fftw` variant, the binary additionally needs `libfftw3f` at runtime (Debian/Ubuntu: `libfftw3-single3`; Fedora: `fftw-libs-single`; macOS: `brew install fftw`). The `:fftw-static` variant statically links the FFTW archive (`libfftw3f.a` from `libfftw3-dev` / `brew install fftw`) and has no runtime FFT dependency. The `:kfr` variant similarly needs `libkfr_dft` at runtime; there is no static KFR variant in the `dist:*` scripts (build it manually if you need one).
 
 ALSA / PulseAudio remain dynamically linked even in the static build — those are part of the desktop Linux baseline and pinning specific versions hurts portability more than it helps.
 
@@ -240,7 +232,7 @@ npm run test:renderer  # JS tests via vitest
 - **`test_peak_detect.cpp`** — gate / shape / prominence / NMS / `max_peaks` for `DSPPipeline::detect_peaks` against synthetic spectra.
 - **`test_hilbert.cpp`** — analytic-signal correctness: sign of the imaginary part, constant magnitude under sinusoidal input, +f vs -f bin dominance.
 - **`test_downconverter.cpp`** — NCO + windowed-sinc LPF + decimator: pass-through, frequency translation to DC, attenuation outside the post-decimation passband, length contracts, streaming-equals-one-shot for FIR/NCO state.
-- **`test_overlap.cpp`** — FFT window-stride overlap: slide-buffer correctness across 50/75/87.5/93.75 % factors; the overlapped path produces bit-equivalent output to a non-overlapped reference at the matching hop.
+- **`test_overlap.cpp`** — FFT window-stride overlap: slide-buffer correctness across the supported {1, 2, 4, 8, 16}× factors; the overlapped path produces bit-equivalent output to a non-overlapped reference at the matching hop.
 - **`test_window_calibration.cpp`** — coherent-gain + ENBW per window; a unit-amplitude tone reads ≈ 0 dBFS regardless of window choice.
 - **`test_multitaper.cpp`** — sine-taper estimator: K=1 dormancy (matches the single-window path), variance reduction ∝ 1/K, tone calibration, resize-time recomputation.
 - **`test_weighting.cpp`** — A/C-weight curves vs IEC 61672 reference values, two-sided symmetry, flatten no-op behavior, empty-span safety.
@@ -250,7 +242,8 @@ npm run test:renderer  # JS tests via vitest
 - **`test_ring_buffer.cpp`** — single-threaded SPSC contract + a real two-thread producer/consumer property test that asserts strict ordering under the drop-oldest overflow policy.
 - **`test_iq_listener.cpp`** — header parsing for the TCP SDR protocol, format decoders for U8IQ/I16IQ/F32IQ/F32Real (all explicit LE), and a real socket round-trip on loopback.
 - **`test_file_decoders.cpp`** — WAV / AIFF / raw / SigMF datatype parsing against on-disk fixtures.
-- **`test_fft_wisdom.cpp`** — warm-up writes wisdom to `$HOME`, and `FFTW_WISDOM_ONLY` plan creation succeeds for warmed sizes.
+- **`test_fft_backends.cpp`** — parameterized correctness suite (impulse, DC, single tone, Parseval, c2c) over every FFT backend compiled into the test binary, plus a cross-backend agreement check when more than one is present.
+- **`test_fft_wisdom.cpp`** — *(only built with `-DUSE_FFTW=ON`)* warm-up writes wisdom to `$HOME`, and `FFTW_WISDOM_ONLY` plan creation succeeds for warmed sizes.
 
 `npm run test:renderer` runs the vitest suite (`tests/renderer/*.test.js`):
 
@@ -289,7 +282,7 @@ signalscope/
 │   │   │   └── tokens.js              # Color + typography tokens
 │   │   └── styles/global.css          # Spinner removal, scrollbars, range thumb
 │   └── backend/
-│       ├── CMakeLists.txt             # Mandatory: fftw3f, zlib, threads, ws server
+│       ├── CMakeLists.txt             # pocketfft default; -DUSE_FFTW / -DUSE_KFR opt-in
 │       ├── main.cpp                   # AppState (+ OutputFrames), threads, command dispatch
 │       ├── protocol/
 │       │   ├── protocol.hpp           # FrameHeader, FrameType, FrameFlags, serialize_frame
@@ -298,11 +291,12 @@ signalscope/
 │       │   ├── ring_buffer.hpp        # Lock-free SPSC ring (drop-oldest overflow)
 │       │   └── file_exports.hpp       # Backend-side WAV / AIFF / CSV / RAW writers
 │       ├── dsp/
-│       │   ├── dsp_pipeline.hpp       # FFT, windows, overlap, multitaper, peak detect, noise floor
+│       │   ├── dsp_pipeline.hpp       # Windows, overlap, multitaper, peak detect, noise floor
 │       │   ├── downconverter.hpp      # NCO + windowed-sinc FIR + decimator
 │       │   ├── hilbert.hpp            # 257-tap Hilbert FIR (image rejection)
 │       │   ├── weighting.hpp          # IEC 61672 A/C-weight curves (Flatten = no-op)
-│       │   └── spectrum_history.hpp   # Deep-history ring (mutex-guarded deque)
+│       │   ├── spectrum_history.hpp   # Deep-history ring (mutex-guarded deque)
+│       │   └── fft/                   # IFftBackend + pocketfft (default), FFTW, KFR
 │       ├── source/
 │       │   └── iq_listener.hpp        # TCP SDR publisher listener (LE-explicit decoders)
 │       ├── audio/
@@ -332,7 +326,7 @@ signalscope/
 
 **Signal processing (all backend / native)**
 - FFT sizes 256 → 65536, six window functions, per-window coherent-gain + ENBW calibration so tone amplitude stays consistent across window choices
-- **FFT overlap** — 0 / 50 / 75 / 87.5 / 93.75 % (slide-buffer-based, no extra capture); the renderer's time-axis zoom auto-promotes to higher overlap factors so each visible row is its own FFT
+- **FFT overlap** — 0 / 50 / 75 % (slide-buffer-based, no extra capture); the renderer's time-axis zoom auto-promotes to higher overlap factors (up to 16×) so each visible row is its own FFT
 - **Multitaper estimator** — K ∈ {1, 2, 4, 8} orthogonal sine tapers (Riedel-Sidorenko); averages K squared FFTs for ~1/K spectrum variance
 - Linear or **logarithmic** frequency axis (decade ticks + minor stops)
 - **Peak hold** — separate trace, doesn't contaminate the spectrogram

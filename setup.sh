@@ -64,7 +64,6 @@ SYSTEM_PKGS=(
     curl wget
 
     # C++ backend libraries
-    libfftw3-dev        # FFTW3 single-precision (fftw3f) — required FFT engine
     zlib1g-dev          # zlib — required (uWebSockets fallback path)
     libssl-dev          # OpenSSL — fallback WebSocket server's SHA-1
     libasound2-dev      # ALSA — Linux audio capture
@@ -130,6 +129,22 @@ if [ ! -f "$MINIAUDIO_DEST" ]; then
     echo "  ✓ miniaudio installed to $MINIAUDIO_DEST"
 else
     echo "  ✓ miniaudio already present"
+fi
+
+# pocketfft (single-header, BSD-3-Clause). Default FFT backend.
+# MIT-safe — unlike FFTW/KFR (GPL), shipping a pocketfft-linked binary
+# under MIT is fine.
+POCKETFFT_REVISION="5f27d5a8f51c5c25030cb22abf434decc9faf0ff"
+POCKETFFT_DEST="$THIRD_PARTY/pocketfft_hdronly.h"
+if [ ! -f "$POCKETFFT_DEST" ]; then
+    echo "  Downloading pocketfft (rev ${POCKETFFT_REVISION:0:10})..."
+    mkdir -p "$(dirname "$POCKETFFT_DEST")"
+    download_file \
+        "https://raw.githubusercontent.com/mreineck/pocketfft/${POCKETFFT_REVISION}/pocketfft_hdronly.h" \
+        "$POCKETFFT_DEST"
+    echo "  ✓ pocketfft installed to $POCKETFFT_DEST"
+else
+    echo "  ✓ pocketfft already present"
 fi
 echo ""
 
@@ -213,9 +228,11 @@ echo "║              Setup Complete              ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 echo "  WebSocket server: $([ "$UWS_INSTALLED" = true ] && echo "uWebSockets" || echo "Built-in fallback")"
-echo "  FFT engine:       FFTW3 (single-precision, required)"
+echo "  FFT engine:       pocketfft (BSD-3, default — MIT-safe binaries)"
+echo "                    Optional: -DUSE_FFTW=ON (GPL) -DUSE_KFR=ON (GPL)"
 echo "  JSON parser:      nlohmann/json ${NLOHMANN_VERSION} (vendored)"
 echo "  Audio backend:    miniaudio ${MINIAUDIO_VERSION} (vendored)"
+echo "  FFT backend:      pocketfft (vendored, single-header)"
 echo ""
 echo "  Next steps:"
 echo "    npm run build:backend    # Compile C++ backend"

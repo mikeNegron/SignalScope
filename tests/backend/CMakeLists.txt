@@ -4,6 +4,11 @@ project(signalscope-tests LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Mirror the backend's USE_FFTW / USE_KFR options so the same toggles
+# drive what the tests compile against. Default off — pocketfft only.
+option(USE_FFTW "Compile FFTW backend into tests"  OFF)
+option(USE_KFR  "Compile KFR backend into tests"   OFF)
+
 # GoogleTest / GoogleMock via FetchContent
 # Pinned to v1.14.0 - current release at time of writing. Pinning a
 # tag (rather than `main`) keeps test runs reproducible across machines.
@@ -31,6 +36,34 @@ function(signalscope_add_test name)
     gtest_discover_tests(${name})
 endfunction()
 
+# Compile the FFT backend stack into a test target. Mirrors what the
+# production CMake adds to signalscope-backend so DSPPipeline-dependent
+# tests resolve the same symbols (ss::fft::make_backend, etc.) without
+# needing a separate library target.
+function(signalscope_link_fft_backend tgt)
+    target_sources(${tgt} PRIVATE
+        ${BACKEND_SRC}/dsp/fft/fft_factory.cpp
+        ${BACKEND_SRC}/dsp/fft/pocketfft_backend.cpp
+    )
+    target_include_directories(${tgt} PRIVATE ${BACKEND_SRC}/third_party)
+    if(USE_FFTW)
+        target_sources(${tgt} PRIVATE ${BACKEND_SRC}/dsp/fft/fftw_backend.cpp)
+        target_compile_definitions(${tgt} PRIVATE SIGNALSCOPE_HAVE_FFTW=1)
+        find_library(FFTW3F_LIB_${tgt}         NAMES fftw3f         REQUIRED)
+        find_library(FFTW3F_THREADS_LIB_${tgt} NAMES fftw3f_threads REQUIRED)
+        target_link_libraries(${tgt} PRIVATE
+            ${FFTW3F_LIB_${tgt}} ${FFTW3F_THREADS_LIB_${tgt}})
+    endif()
+    if(USE_KFR)
+        target_sources(${tgt} PRIVATE ${BACKEND_SRC}/dsp/fft/kfr_backend.cpp)
+        target_compile_definitions(${tgt} PRIVATE SIGNALSCOPE_HAVE_KFR=1)
+        find_package(KFR CONFIG REQUIRED
+            HINTS ${KFR_DIR} ${KFR_ROOT}
+            PATHS /usr/local /usr)
+        target_link_libraries(${tgt} PRIVATE kfr kfr_dft)
+    endif()
+endfunction()
+
 # Unit tests
 # Pure-function coverage for ws_framing.hpp. No sockets, no threads.
 signalscope_add_test(test_ws_framing test_ws_framing.cpp)
@@ -42,19 +75,20 @@ signalscope_add_test(test_hilbert test_hilbert.cpp)
 
 # DSPPipeline::detect_peaks - gate / shape / prominence / NMS / max_peaks.
 # Largest single algorithm in the codebase; fully synthetic spectra so the
-# tests are fast and deterministic. DSPPipeline's constructor allocates
-# FFTW plans, so the test target has to link FFTW too.
+# tests are fast and deterministic.
 signalscope_add_test(test_peak_detect test_peak_detect.cpp)
-find_library(FFTW3F_PEAK_LIB NAMES fftw3f REQUIRED)
-find_library(FFTW3F_THREADS_PEAK_LIB NAMES fftw3f_threads REQUIRED)
-target_link_libraries(test_peak_detect PRIVATE
-    ${FFTW3F_PEAK_LIB} ${FFTW3F_THREADS_PEAK_LIB})
+signalscope_link_fft_backend(test_peak_detect)
 
 # Wire-protocol round-trip - serialize_frame builds a frame; the test
 # decodes it with the same little-endian primitives the renderer uses.
 # Catches any future drift in header layout, field width, or endian
 # assumption between backend and renderer.
 signalscope_add_test(test_wire_protocol test_wire_protocol.cpp)
+
+# Steady-state allocation count. Replaces global operator new with a
+# counter; must be its own binary so gtest's infrastructure isn't
+# included in the counted window.
+signalscope_add_test(test_serialize_alloc_count test_serialize_alloc_count.cpp)
 
 signalscope_add_test(test_file_decoders test_file_decoders.cpp)
 
@@ -67,40 +101,36 @@ signalscope_add_test(test_downconverter test_downconverter.cpp)
 # under a real two-thread workload.
 signalscope_add_test(test_ring_buffer test_ring_buffer.cpp)
 
-# Equalization curves (A/C-weight, flatten). Pure-function, no FFTW.
+# Equalization curves (A/C-weight, flatten). Pure-function, no FFT.
 signalscope_add_test(test_weighting test_weighting.cpp)
 
-# DSPPipeline overlap (FFT window stride / slide buffer). Needs FFTW
-# because DSPPipeline's constructor allocates plans.
+# DSPPipeline overlap (FFT window stride / slide buffer).
 signalscope_add_test(test_overlap test_overlap.cpp)
-find_library(FFTW3F_OVERLAP_LIB         NAMES fftw3f         REQUIRED)
-find_library(FFTW3F_THREADS_OVERLAP_LIB NAMES fftw3f_threads REQUIRED)
-target_link_libraries(test_overlap PRIVATE
-    ${FFTW3F_OVERLAP_LIB} ${FFTW3F_THREADS_OVERLAP_LIB})
+signalscope_link_fft_backend(test_overlap)
 
 # Per-window coherent-gain + ENBW calibration. Tones must read at the
-# same dB across window choices - same dependency story as test_overlap.
+# same dB across window choices.
 signalscope_add_test(test_window_calibration test_window_calibration.cpp)
-find_library(FFTW3F_WINCAL_LIB         NAMES fftw3f         REQUIRED)
-find_library(FFTW3F_THREADS_WINCAL_LIB NAMES fftw3f_threads REQUIRED)
-target_link_libraries(test_window_calibration PRIVATE
-    ${FFTW3F_WINCAL_LIB} ${FFTW3F_THREADS_WINCAL_LIB})
+signalscope_link_fft_backend(test_window_calibration)
 
 # Multitaper estimator (sine tapers). Tests K=1 dormancy, variance
 # reduction, tone calibration, resize-time recomputation.
 signalscope_add_test(test_multitaper test_multitaper.cpp)
-find_library(FFTW3F_MT_LIB         NAMES fftw3f         REQUIRED)
-find_library(FFTW3F_THREADS_MT_LIB NAMES fftw3f_threads REQUIRED)
-target_link_libraries(test_multitaper PRIVATE
-    ${FFTW3F_MT_LIB} ${FFTW3F_THREADS_MT_LIB})
+signalscope_link_fft_backend(test_multitaper)
 
 # SpectrumHistory ring (backend-held deep history). Pure data
-# structure, no FFTW needed.
+# structure, no FFT needed.
 signalscope_add_test(test_spectrum_history test_spectrum_history.cpp)
 
 # Live SDR listener - header parsing + format decoders + a real socket
 # round-trip. Runs entirely on loopback so it's hermetic.
 signalscope_add_test(test_iq_listener test_iq_listener.cpp)
+
+# Parameterized correctness suite over every FFT backend compiled into
+# the binary (pocketfft always; FFTW / KFR conditionally). No subprocess,
+# no sockets — pure in-process unit tests on IFftBackend.
+signalscope_add_test(test_fft_backends test_fft_backends.cpp)
+signalscope_link_fft_backend(test_fft_backends)
 
 # Integration tests
 # These spawn a real backend subprocess. The binary location can be
@@ -117,13 +147,15 @@ target_compile_definitions(test_ws_multi_client PRIVATE
     SIGNALSCOPE_BACKEND_BIN="${SIGNALSCOPE_BACKEND_BIN}"
 )
 
-# FFTW wisdom warm-up. Imports the file the backend wrote and verifies
-# WISDOM_ONLY plan creation succeeds for a warmed size. Needs FFTW +
-# the threads helper for the same reason main.cpp does.
-signalscope_add_test(test_fft_wisdom test_fft_wisdom.cpp)
-find_library(FFTW3F_TEST_LIB NAMES fftw3f REQUIRED)
-find_library(FFTW3F_THREADS_TEST_LIB NAMES fftw3f_threads REQUIRED)
-target_link_libraries(test_fft_wisdom PRIVATE
-    ${FFTW3F_TEST_LIB} ${FFTW3F_THREADS_TEST_LIB})
-target_compile_definitions(test_fft_wisdom PRIVATE
-    SIGNALSCOPE_BACKEND_BIN="${SIGNALSCOPE_BACKEND_BIN}")
+# FFTW wisdom warm-up. FFTW-specific (the wisdom file format and the
+# planner-thread-safe handshake have no equivalent in pocketfft/KFR),
+# so this test is only built when USE_FFTW=ON.
+if(USE_FFTW)
+    signalscope_add_test(test_fft_wisdom test_fft_wisdom.cpp)
+    find_library(FFTW3F_TEST_LIB         NAMES fftw3f         REQUIRED)
+    find_library(FFTW3F_THREADS_TEST_LIB NAMES fftw3f_threads REQUIRED)
+    target_link_libraries(test_fft_wisdom PRIVATE
+        ${FFTW3F_TEST_LIB} ${FFTW3F_THREADS_TEST_LIB})
+    target_compile_definitions(test_fft_wisdom PRIVATE
+        SIGNALSCOPE_BACKEND_BIN="${SIGNALSCOPE_BACKEND_BIN}")
+endif()

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -56,6 +57,21 @@ public:
     uint32_t channels() const { return decoder_ ? decoder_->channels() : 0; }
     size_t loop_count() const { return loop_count_.load(std::memory_order_relaxed); }
 
+    // Playback speed multiplier. 1.0 = real-time (the file's natural rate).
+    // < 1.0 is slow-mo, > 1.0 is fast-forward. Picked up by the worker on
+    // the next chunk-pacing cycle. High speeds may overflow the capture
+    // ring (drop-oldest), at which point samples are skipped — acceptable
+    // for fast scrub, but the user loses analysis fidelity. Clamped to
+    // [0.1, 32.0]. Effective immediately on existing playback.
+    void set_replay_speed(float speed) {
+        if (!std::isfinite(speed)) speed = 1.0f;
+        replay_speed_.store(std::clamp(speed, 0.1f, 32.0f),
+                            std::memory_order_relaxed);
+    }
+    float replay_speed() const {
+        return replay_speed_.load(std::memory_order_relaxed);
+    }
+
 private:
     void worker() {
         std::cout << "[file] Worker started (sr=" << decoder_->sample_rate()
@@ -93,10 +109,14 @@ private:
                 std::ignore = capture_buffer_->write(chunk.data(), chunk.size());
             }
 
-            // Pace the producer to the file's natural sample rate so we don't
-            // overrun the ring buffer (which would drop oldest data).
+            // Pace the producer to the file's natural sample rate, scaled
+            // by the user-set replay speed. speed=1 → real-time; speed=10
+            // → ten times faster; the chunk duration shrinks accordingly.
+            const float speed = std::max(
+                0.001f, replay_speed_.load(std::memory_order_relaxed));
             const auto chunk_dur = std::chrono::microseconds(
-                static_cast<long long>(static_cast<double>(got) * 1000000.0 / sr));
+                static_cast<long long>(static_cast<double>(got) * 1000000.0 /
+                                       (static_cast<double>(sr) * speed)));
             next_deadline += chunk_dur;
             const auto now = std::chrono::steady_clock::now();
             if (next_deadline > now) {
@@ -114,6 +134,7 @@ private:
     SPSCRingBuffer<float>* capture_buffer_ = nullptr;
     std::atomic<bool> running_{false};
     std::atomic<size_t> loop_count_{0};
+    std::atomic<float> replay_speed_{1.0f};
     std::thread thread_;
 };
 

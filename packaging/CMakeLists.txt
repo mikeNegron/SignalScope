@@ -10,11 +10,15 @@ project(signalscope-package
     DESCRIPTION "CPack wrapper around the electron-builder distributable"
     LANGUAGES NONE)
 
-set(SIGNALSCOPE_VARIANT "shared" CACHE STRING
-    "Which electron-builder artifact to package: shared or static")
-set_property(CACHE SIGNALSCOPE_VARIANT PROPERTY STRINGS shared static)
-if(NOT SIGNALSCOPE_VARIANT MATCHES "^(shared|static)$")
-    message(FATAL_ERROR "SIGNALSCOPE_VARIANT must be 'shared' or 'static', got '${SIGNALSCOPE_VARIANT}'")
+set(SIGNALSCOPE_VARIANT "pocketfft" CACHE STRING
+    "Which electron-builder artifact to package: pocketfft (default, MIT), "
+    "fftw (GPL, dynamic link), fftw-static (GPL, static link), or kfr (GPL)")
+set_property(CACHE SIGNALSCOPE_VARIANT PROPERTY STRINGS
+    pocketfft fftw fftw-static kfr)
+if(NOT SIGNALSCOPE_VARIANT MATCHES "^(pocketfft|fftw|fftw-static|kfr)$")
+    message(FATAL_ERROR
+        "SIGNALSCOPE_VARIANT must be one of: pocketfft, fftw, fftw-static, kfr. "
+        "Got '${SIGNALSCOPE_VARIANT}'.")
 endif()
 
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)

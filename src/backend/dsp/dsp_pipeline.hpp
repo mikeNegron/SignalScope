@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <vector>
 #include <algorithm>
 #include <numbers>
@@ -10,9 +11,7 @@
 #include <span>
 #include <string>
 #include "protocol/protocol.hpp"
-
-// FFTW (single-precision) is the only FFT backend.
-#include <fftw3.h>
+#include "dsp/fft/fft_backend.hpp"
 
 namespace signalscope {
     struct Config {
@@ -27,14 +26,12 @@ class DSPPipeline {
 public:
 
     explicit DSPPipeline(Config cfg = {})
-        : config_(cfg)
+        : config_(cfg), fft_(ss::fft::make_backend())
     {
         resize(cfg.fft_size);
     }
 
-    ~DSPPipeline() {
-        free_plans();
-    }
+    ~DSPPipeline() = default;
 
     void set_fft_size(size_t n) {
         config_.fft_size = n;
@@ -125,15 +122,19 @@ public:
         const size_t input_len = input.size();
         const float gain_linear = std::pow(10.0f, config_.gain_db / 20.0f);
 
+        // Backend-owned input/output buffers. Stable until resize().
+        float*                     in_real = fft_->input_real();
+        const std::complex<float>* out_r2c = fft_->output_r2c();
+
         // Resolve the FFT input window. The slide path is only entered when
         // overlap is engaged; the no-overlap fast path stays bit-identical
         // to its old behavior.
         std::size_t scan_len;       // how much of `input` is "fresh" (clip-tested)
         if (overlap_factor_ == 1) {
             for (size_t i = 0; i < N && i < input_len; i++)
-                fftw_in_real_[i] = input[i] * window_coeffs_[i] * gain_linear;
+                in_real[i] = input[i] * window_coeffs_[i] * gain_linear;
             for (size_t i = input_len; i < N; i++)
-                fftw_in_real_[i] = 0.0f;
+                in_real[i] = 0.0f;
             scan_len = std::min(N, input_len);
         } else {
             // Slide left by hop, append new samples to the tail.
@@ -145,7 +146,7 @@ public:
             for (size_t i = 0; i < fresh; i++) slide_real_[keep + i] = input[i];
             for (size_t i = fresh; i < hop;  i++) slide_real_[keep + i] = 0.0f;
             for (size_t i = 0; i < N; i++)
-                fftw_in_real_[i] = slide_real_[i] * window_coeffs_[i] * gain_linear;
+                in_real[i] = slide_real_[i] * window_coeffs_[i] * gain_linear;
             scan_len = fresh;
         }
 
@@ -156,7 +157,7 @@ public:
 
         if (taper_count_ > 1) {
             // Multitaper path: the FFT input window is whatever the
-            // single-window path JUST wrote into fftw_in_real_, but
+            // single-window path JUST wrote into in_real, but
             // pre-window-multiplication. Reconstruct it (pre-window) by
             // dividing out window_coeffs_, then loop K times applying
             // each taper. Cheaper alternative: snapshot the source data
@@ -172,13 +173,13 @@ public:
             for (int k = 0; k < taper_count_; k++) {
                 const float* taper = tapers_[k].data();
                 for (size_t i = 0; i < raw_n; i++)
-                    fftw_in_real_[i] = raw[i] * taper[i] * gain_linear;
+                    in_real[i] = raw[i] * taper[i] * gain_linear;
                 for (size_t i = raw_n; i < N; i++)
-                    fftw_in_real_[i] = 0.0f;
-                fftwf_execute(plan_r2c_);
+                    in_real[i] = 0.0f;
+                fft_->execute_r2c();
                 for (size_t i = 0; i < halfN; i++) {
-                    const float re = fftw_out_r2c_[i][0];
-                    const float im = fftw_out_r2c_[i][1];
+                    const float re = out_r2c[i].real();
+                    const float im = out_r2c[i].imag();
                     psd_acc_[i] += re * re + im * im;
                 }
             }
@@ -190,7 +191,7 @@ public:
                 magnitude_[i] = (mag > 1e-10f) ? 20.0f * std::log10(mag) : -200.0f;
             }
         } else {
-            fftwf_execute(plan_r2c_);
+            fft_->execute_r2c();
 
             // 2/N is the standard real-FFT normalization (factor 2 because
             // conjugate-symmetric pairs combine; 1/N is plain DFT scaling).
@@ -198,8 +199,8 @@ public:
             // makes a unit-amplitude tone read 0 dBFS regardless of window.
             const float norm = 2.0f / (static_cast<float>(N) * coherent_gain_);
             for (size_t i = 0; i < halfN; i++) {
-                float re = fftw_out_r2c_[i][0] * norm;
-                float im = fftw_out_r2c_[i][1] * norm;
+                float re = out_r2c[i].real() * norm;
+                float im = out_r2c[i].imag() * norm;
                 float mag = std::sqrt(re * re + im * im);
                 magnitude_[i] = (mag > 1e-10f) ? 20.0f * std::log10(mag) : -200.0f;
             }
@@ -244,8 +245,9 @@ public:
     const std::vector<float>& get_phase() {
         const size_t halfN = config_.fft_size / 2;
         phase_.resize(halfN);
+        const std::complex<float>* out_r2c = fft_->output_r2c();
         for (size_t i = 0; i < halfN; i++) {
-            phase_[i] = std::atan2(fftw_out_r2c_[i][1], fftw_out_r2c_[i][0]);
+            phase_[i] = std::atan2(out_r2c[i].imag(), out_r2c[i].real());
         }
         return phase_;
     }
@@ -268,16 +270,19 @@ public:
         const size_t input_len = std::min(re.size(), im.size());
         const float gain_linear = std::pow(10.0f, config_.gain_db / 20.0f);
 
+        // Backend-owned input/output buffers. Stable until resize().
+        std::complex<float>*       in_c2c  = fft_->input_complex();
+        const std::complex<float>* out_c2c = fft_->output_complex();
+
         std::size_t scan_len;
         if (overlap_factor_ == 1) {
             for (size_t i = 0; i < N && i < input_len; i++) {
                 const float w = window_coeffs_[i] * gain_linear;
-                fftw_in_c2c_[i][0] = re[i] * w;
-                fftw_in_c2c_[i][1] = im[i] * w;
+                in_c2c[i].real(re[i] * w);
+                in_c2c[i].imag(im[i] * w);
             }
             for (size_t i = input_len; i < N; i++) {
-                fftw_in_c2c_[i][0] = 0.0f;
-                fftw_in_c2c_[i][1] = 0.0f;
+                in_c2c[i] = {};
             }
             scan_len = std::min(N, input_len);
         } else {
@@ -298,8 +303,8 @@ public:
             }
             for (size_t i = 0; i < N; i++) {
                 const float w = window_coeffs_[i] * gain_linear;
-                fftw_in_c2c_[i][0] = slide_re_[i] * w;
-                fftw_in_c2c_[i][1] = slide_im_[i] * w;
+                in_c2c[i].real(slide_re_[i] * w);
+                in_c2c[i].imag(slide_im_[i] * w);
             }
             scan_len = fresh;
         }
@@ -326,19 +331,18 @@ public:
                 const float* taper = tapers_[k].data();
                 for (size_t i = 0; i < raw_n; i++) {
                     const float w = taper[i] * gain_linear;
-                    fftw_in_c2c_[i][0] = raw_re[i] * w;
-                    fftw_in_c2c_[i][1] = raw_im[i] * w;
+                    in_c2c[i].real(raw_re[i] * w);
+                    in_c2c[i].imag(raw_im[i] * w);
                 }
                 for (size_t i = raw_n; i < N; i++) {
-                    fftw_in_c2c_[i][0] = 0.0f;
-                    fftw_in_c2c_[i][1] = 0.0f;
+                    in_c2c[i] = {};
                 }
-                fftwf_execute(plan_c2c_);
+                fft_->execute_c2c_forward();
                 const size_t half = N / 2;
                 for (size_t i = 0; i < N; i++) {
                     const size_t src = (i + half) % N;
-                    const float r2 = fftw_out_c2c_[src][0];
-                    const float i2 = fftw_out_c2c_[src][1];
+                    const float r2 = out_c2c[src].real();
+                    const float i2 = out_c2c[src].imag();
                     psd_acc_full_[i] += r2 * r2 + i2 * i2;
                 }
             }
@@ -376,7 +380,7 @@ public:
             return magnitude_full_;
         }
 
-        fftwf_execute(plan_c2c_);
+        fft_->execute_c2c_forward();
 
         magnitude_full_.resize(N);
         // 1/N is the standard DFT normalization for complex input (no
@@ -388,8 +392,8 @@ public:
         const size_t half = N / 2;
         for (size_t i = 0; i < N; i++) {
             const size_t src = (i + half) % N;
-            const float r  = fftw_out_c2c_[src][0] * norm;
-            const float ix = fftw_out_c2c_[src][1] * norm;
+            const float r  = out_c2c[src].real() * norm;
+            const float ix = out_c2c[src].imag() * norm;
             const float mag = std::sqrt(r * r + ix * ix);
             magnitude_full_[i] = (mag > 1e-10f) ? 20.0f * std::log10(mag) : -200.0f;
         }
@@ -432,9 +436,10 @@ public:
         const size_t N = config_.fft_size;
         const size_t half = N / 2;
         phase_full_.resize(N);
+        const std::complex<float>* out_c2c = fft_->output_complex();
         for (size_t i = 0; i < N; i++) {
             const size_t src = (i + half) % N;
-            phase_full_[i] = std::atan2(fftw_out_c2c_[src][1], fftw_out_c2c_[src][0]);
+            phase_full_[i] = std::atan2(out_c2c[src].imag(), out_c2c[src].real());
         }
         return phase_full_;
     }
@@ -606,15 +611,11 @@ private:
     struct CandHolder { uint16_t bin; float value; float prom; };
     std::vector<CandHolder> cand_;
 
-    // FFTW plans + buffers (single-precision).
-    // r2c: real input -> N/2+1 complex bins (one-sided spectrum).
-    // c2c: complex input -> N complex bins (two-sided spectrum, used for IQ).
-    fftwf_plan      plan_r2c_     = nullptr;
-    float*          fftw_in_real_ = nullptr;
-    fftwf_complex*  fftw_out_r2c_ = nullptr;
-    fftwf_plan      plan_c2c_     = nullptr;
-    fftwf_complex*  fftw_in_c2c_  = nullptr;
-    fftwf_complex*  fftw_out_c2c_ = nullptr;
+    // FFT backend (pocketfft default; FFTW/KFR optional). Owns input
+    // and output buffers; lifetime is tied to the pipeline.
+    //   r2c: real input  -> N/2+1 complex bins (one-sided spectrum).
+    //   c2c: complex in  -> N complex bins (two-sided spectrum, IQ path).
+    std::unique_ptr<ss::fft::IFftBackend> fft_;
 
     // Overlap state. `overlap_factor_` is 1 (no overlap), 2 (50%), or 4 (75%).
     // Slide buffers retain `fft_size − hop_size` samples between calls so
@@ -649,15 +650,6 @@ private:
     std::vector<float> psd_acc_;
     std::vector<float> psd_acc_full_;
 
-    void free_plans() {
-        if (plan_r2c_)     { fftwf_destroy_plan(plan_r2c_);     plan_r2c_ = nullptr; }
-        if (plan_c2c_)     { fftwf_destroy_plan(plan_c2c_);     plan_c2c_ = nullptr; }
-        if (fftw_in_real_) { fftwf_free(fftw_in_real_);         fftw_in_real_ = nullptr; }
-        if (fftw_out_r2c_) { fftwf_free(fftw_out_r2c_);         fftw_out_r2c_ = nullptr; }
-        if (fftw_in_c2c_)  { fftwf_free(fftw_in_c2c_);          fftw_in_c2c_  = nullptr; }
-        if (fftw_out_c2c_) { fftwf_free(fftw_out_c2c_);         fftw_out_c2c_ = nullptr; }
-    }
-
     void resize(size_t n) {
         window_coeffs_.resize(n);
         magnitude_.resize(n / 2);
@@ -675,35 +667,10 @@ private:
         compute_window();
         compute_tapers();
 
-        free_plans();
-
-        // Plan strategy: try cached wisdom first (fast, optimal), fall
-        // back to ESTIMATE if no wisdom exists for this size yet (also
-        // fast, ~5-15 % slower runtime). The fallback path makes resize
-        // never freeze, even on a totally cold machine. main.cpp's
-        // background warm-up thread populates wisdom for common sizes
-        // so most resizes hit the WISDOM_ONLY fast path.
-        fftw_in_real_ = fftwf_alloc_real(n);
-        fftw_out_r2c_ = fftwf_alloc_complex(n / 2 + 1);
-        plan_r2c_ = fftwf_plan_dft_r2c_1d(
-            static_cast<int>(n), fftw_in_real_, fftw_out_r2c_,
-            FFTW_MEASURE | FFTW_WISDOM_ONLY);
-        if (!plan_r2c_) {
-            plan_r2c_ = fftwf_plan_dft_r2c_1d(
-                static_cast<int>(n), fftw_in_real_, fftw_out_r2c_,
-                FFTW_ESTIMATE);
-        }
-
-        fftw_in_c2c_  = fftwf_alloc_complex(n);
-        fftw_out_c2c_ = fftwf_alloc_complex(n);
-        plan_c2c_ = fftwf_plan_dft_1d(
-            static_cast<int>(n), fftw_in_c2c_, fftw_out_c2c_,
-            FFTW_FORWARD, FFTW_MEASURE | FFTW_WISDOM_ONLY);
-        if (!plan_c2c_) {
-            plan_c2c_ = fftwf_plan_dft_1d(
-                static_cast<int>(n), fftw_in_c2c_, fftw_out_c2c_,
-                FFTW_FORWARD, FFTW_ESTIMATE);
-        }
+        // Backend (re)allocates input/output buffers and any plan state
+        // it needs. FFTW will use cached wisdom on the fast path; the
+        // pocketfft and KFR backends have no analogue and just allocate.
+        fft_->resize(n);
     }
 
     void compute_window() {

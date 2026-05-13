@@ -237,3 +237,75 @@ TEST(WireProtocol, SampleRateNonInteger) {
         FrameType::Spectrum, &dummy, 1, 0, 0, sr, 0);
     EXPECT_FLOAT_EQ(read_f32_le(f, 12), sr);
 }
+
+// serialize_frame_into must produce byte-for-byte identical output to
+// serialize_frame. The renderer doesn't care which path produced the
+// bytes — both must remain wire-compatible forever.
+TEST(SerializeFrameInto, MatchesSerializeFrame) {
+    const std::vector<float> payload = {1.5f, -2.25f, 0.0f, 1e-9f, 1e9f};
+    constexpr uint16_t fft_size    = 4096;
+    constexpr uint32_t frame_id    = 0xDEADBEEF;
+    constexpr float    sample_rate = 48000.0f;
+    constexpr uint8_t  flags       = 0x05; // Clipping | TwoSided
+
+    auto reference = serialize_frame(
+        FrameType::Spectrum, payload.data(), payload.size(),
+        fft_size, frame_id, sample_rate, flags);
+
+    std::vector<uint8_t> dst;
+    signalscope::serialize_frame_into(
+        dst,
+        FrameType::Spectrum, payload.data(), payload.size(),
+        fft_size, frame_id, sample_rate, flags);
+
+    ASSERT_EQ(dst.size(), reference.size());
+    EXPECT_EQ(0, std::memcmp(dst.data(), reference.data(), dst.size()));
+}
+
+// Calling serialize_frame_into a second time with the same payload size
+// must NOT reallocate. The whole point of the API is that the broadcast
+// loop reuses buffers across frames.
+TEST(SerializeFrameInto, ReusesCapacityOnSameSize) {
+    constexpr std::size_t N = 1024;
+    std::vector<float> payload(N, 0.5f);
+
+    std::vector<uint8_t> dst;
+    signalscope::serialize_frame_into(
+        dst, FrameType::Spectrum, payload.data(), N,
+        4096, 1, 48000.0f, 0);
+    const auto* first_data = dst.data();
+    const auto  first_cap  = dst.capacity();
+
+    // Mutate payload so the new write is content-different but
+    // size-identical, then re-serialize.
+    std::fill(payload.begin(), payload.end(), -1.0f);
+    signalscope::serialize_frame_into(
+        dst, FrameType::Spectrum, payload.data(), N,
+        4096, 2, 48000.0f, 0);
+
+    EXPECT_EQ(dst.data(),     first_data) << "buffer must not be reallocated";
+    EXPECT_EQ(dst.capacity(), first_cap)  << "capacity must be preserved";
+}
+
+// Calling serialize_frame_into with a SMALLER payload than last time
+// must NOT shrink the buffer (we keep the high-water mark).
+TEST(SerializeFrameInto, KeepsHighWaterMark) {
+    std::vector<float> big(4096, 0.0f);
+    std::vector<float> small(64, 0.0f);
+
+    std::vector<uint8_t> dst;
+    signalscope::serialize_frame_into(
+        dst, FrameType::Spectrum, big.data(), big.size(),
+        4096, 1, 48000.0f, 0);
+    const auto cap_after_big = dst.capacity();
+
+    signalscope::serialize_frame_into(
+        dst, FrameType::Spectrum, small.data(), small.size(),
+        4096, 2, 48000.0f, 0);
+
+    EXPECT_GE(dst.capacity(), cap_after_big)
+        << "capacity must not shrink between calls";
+    EXPECT_EQ(dst.size(),
+              sizeof(signalscope::FrameHeader) + small.size() * sizeof(float))
+        << "size must match the latest payload exactly";
+}

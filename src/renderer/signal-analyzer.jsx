@@ -58,6 +58,10 @@ export default function SignalAnalyzer({
   const [peakMinLevel, setPeakMinLevel] = usePersistedState("peakMinLevel", -60);
   const [weighting, setWeighting] = usePersistedState("weighting", "none");
   const [overlap, setOverlap] = usePersistedState("overlap", 0);
+  // File replay speed multiplier. 1× is real-time playback; higher
+  // values play the file faster than recorded, lifting the FFT-rate
+  // ceiling at large fft_size (samples arrive faster than 1× wall-clock).
+  const [replaySpeed, setReplaySpeed] = usePersistedState("replaySpeed", 1.0);
   const [taperCount, setTaperCount] = usePersistedState("taperCount", 1);
   // Deep-history scroll. Transient - resets when paused state ends.
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -69,9 +73,13 @@ export default function SignalAnalyzer({
   const [listenSampleRate,   setListenSampleRate]   = usePersistedState("listenSampleRate",   48000);
   const [listenCenterFreq,   setListenCenterFreq]   = usePersistedState("listenCenterFreq",   0);
   const [listenExpectHeader, setListenExpectHeader] = usePersistedState("listenExpectHeader", true);
-  // Tracks the last source picked from the Input tab so the listen panel
-  // can show 'listening' even before the first sample arrives.
-  const [currentSource, setCurrentSource] = useState("test");
+  // Tracks the source picked from the Input tab. Persisted so the
+  // selection survives sidebar-tab unmount/remount (InputTab tears
+  // down when the user navigates away) and full page reloads.
+  // Includes the UI-only labels "websocket" and "simulated" — those
+  // don't trigger a backend set_source command, but the dropdown
+  // still needs to reflect the last selection.
+  const [currentSource, setCurrentSource] = usePersistedState("currentSource", "websocket");
   // Spectrogram/spectrum X-axis viewport in normalized [0,1] coords. Zoom
   // controls (wheel/drag) only respond when paused; on unpause we snap
   // back to full-axis. xMin < xMax is invariant; minimum span 0.001.
@@ -158,14 +166,14 @@ export default function SignalAnalyzer({
 
   const cmd = onBackendCommand;
 
-  // Time-axis auto-overlap. When the user zooms in on the spectrogram's
-  // y axis (paused mode), more FFTs per second are needed so each
-  // visible row stays one FFT computation. Math: at full view the
-  // backend's hop is `fft_size / overlap_factor` and the visible
+  // Time-axis zoom-escalated overlap. When the user zooms in on the
+  // spectrogram's y axis (paused mode), more FFTs per second are needed
+  // so each visible row stays one FFT computation. Math: at full view
+  // the backend's hop is `fft_size / overlap_factor` and the visible
   // window is panel_h × hop / fs. Zooming to a y-span of yz means we
   // want visible_window × yz seconds across the same panel_h rows:
   //   new_hop = old_hop × yz   ->   new_factor = old_factor / yz.
-  // Round up to the nearest supported factor in {1, 2, 4, 8, 16}.
+  // Snap up to the nearest supported factor in {1, 2, 4, 8, 16}.
   // On unzoom/unpause the viewport snaps back and we revert to the
   // user's static `overlap` setting.
   useEffect(() => {
@@ -187,11 +195,16 @@ export default function SignalAnalyzer({
   // Sync persisted settings to the backend whenever a connection
   // becomes available. usePersistedState restores user choices on
   // mount, but those values never went through the `set_*` callbacks
-  // so the backend doesn't know about them until we push here. Fires
-  // once per connect (cmd identity changes when sendCommand is rebuilt).
+  // so the backend doesn't know about them until we push here. Gated
+  // on backendConnected so the effect fires AFTER the WebSocket
+  // actually opens — sendCommand silently drops messages while
+  // readyState !== OPEN, so depending on cmd alone (which is
+  // identity-stable from first render) means the sync runs against
+  // a closed socket and the backend never hears about the user's
+  // saved choices. Reset on disconnect so reconnect re-syncs.
   const syncedRef = useRef(false);
   useEffect(() => {
-    if (!cmd) { syncedRef.current = false; return; }
+    if (!cmd || !backendConnected) { syncedRef.current = false; return; }
     if (syncedRef.current) return;
     syncedRef.current = true;
     cmd("set_fft_size",       +fftSize);
@@ -204,6 +217,7 @@ export default function SignalAnalyzer({
     cmd("set_peak_min_level",  peakMinLevel);
     cmd("set_weighting",       weighting);
     cmd("set_overlap",         overlap);
+    cmd("set_replay_speed",    replaySpeed);
     cmd("set_taper_count",     taperCount);
     cmd("set_history_capacity", historyCapacity);
     cmd("set_listen_port",          listenPort);
@@ -211,15 +225,23 @@ export default function SignalAnalyzer({
     cmd("set_listen_sample_rate",   listenSampleRate);
     cmd("set_listen_center_freq",   listenCenterFreq);
     cmd("set_listen_expect_header", listenExpectHeader);
+    // Restore the source if it's a real backend mode. "websocket" and
+    // "simulated" are UI-only labels (no command); "file" requires a
+    // path the user has to re-pick anyway, so we skip it too.
+    if (currentSource !== "websocket"
+        && currentSource !== "simulated"
+        && currentSource !== "file") {
+      cmd("set_source", currentSource);
+    }
     // Note: NOT pushing sampleRate - backend tracks its own source
     // rate and pushes it back via SourceStatus; pushing here would
     // race with that.
-  }, [cmd]); // intentionally only `cmd` - see comment above
+  }, [cmd, backendConnected]);
 
   const hFFT  = useCallback((v) => { setFftSize(v);  cmd?.("set_fft_size",  +v); }, [cmd]);
   const hWin  = useCallback((v) => { setWindowFn(v); cmd?.("set_window",    v);  }, [cmd]);
   const hGain = useCallback((v) => { setGain(v);     cmd?.("set_gain",      v);  }, [cmd]);
-  const hAvg  = useCallback((v) => { setAvgCount(v); cmd?.("set_avg_count", v);  }, [cmd]);
+  const hAvg  = useCallback((v) => { setAvgCount(v); cmd?.("set_avg_count", v); }, [cmd]);
   const hSR   = useCallback((v) => { setSampleRate(+v); cmd?.("set_sample_rate", +v); }, [cmd]);
   const hTune = useCallback((v) => { setTuneHz(+v); cmd?.("set_tune_offset", +v); }, [cmd]);
   const hDecim = useCallback((v) => {
@@ -247,6 +269,11 @@ export default function SignalAnalyzer({
     const pct = (v >= 75) ? 75 : (v >= 50) ? 50 : 0;
     setOverlap(pct);
     cmd?.("set_overlap", pct);
+  }, [cmd]);
+  const hReplaySpeed = useCallback((v) => {
+    const n = Math.max(0.1, Math.min(32, +v || 1.0));
+    setReplaySpeed(n);
+    cmd?.("set_replay_speed", n);
   }, [cmd]);
   const hTaperCount = useCallback((v) => {
     const k = (v >= 8) ? 8 : (v >= 4) ? 4 : (v >= 2) ? 2 : 1;
@@ -340,6 +367,11 @@ export default function SignalAnalyzer({
   }, [cmd]);
   const hSrc  = useCallback((v) => {
     setCurrentSource(v);
+    // UI-only labels: "simulated" toggles a renderer-side generator
+    // upstream, "websocket" just means "use whatever the backend is
+    // doing", "file" goes through the Browse → load_file path. None
+    // of those need a set_source command.
+    if (v === "simulated" || v === "websocket" || v === "file") return;
     cmd?.("set_source", v);
   }, [cmd]);
   // Send a fully-resolved load_file command. The backend's JSON helpers are
@@ -604,6 +636,9 @@ export default function SignalAnalyzer({
             onSampleRate={hSR}
             onReconnect={onReconnect}
             connColor={connColor}
+            source={currentSource}
+            replaySpeed={replaySpeed}
+            onReplaySpeed={hReplaySpeed}
             listenPort={listenPort}
             listenFormat={listenFormat}
             listenSampleRate={listenSampleRate}

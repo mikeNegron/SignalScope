@@ -58,8 +58,11 @@ pid_t spawn_backend(const std::filesystem::path &tmphome, int port) {
         // Child: HOME drives where the wisdom file lands.
         ::setenv("HOME", tmphome.c_str(), 1);
         const std::string port_arg = "--port=" + std::to_string(port);
+        // Wisdom is FFTW-specific; force the backend to use the FFTW path
+        // even when other backends are compiled in.
         ::execl(SIGNALSCOPE_BACKEND_BIN, SIGNALSCOPE_BACKEND_BIN,
-                "--test", port_arg.c_str(), static_cast<char *>(nullptr));
+                "--test", "--fft-backend=fftw", port_arg.c_str(),
+                static_cast<char *>(nullptr));
         std::_Exit(127);
     }
     return pid;

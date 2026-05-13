@@ -1,0 +1,63 @@
+MIT License
+
+Copyright (c) 2026 Michael E. Negron
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Third-party components bundled or optionally linked into binary distributions:
+
+  pocketfft (BSD-3-Clause)
+    Vendored single-header DSP library. Default FFT backend. Source at
+    src/backend/third_party/pocketfft_hdronly.h.
+    https://github.com/mreineck/pocketfft
+
+  nlohmann/json (MIT)
+    Vendored JSON parser. Source at src/backend/third_party/nlohmann/json.hpp.
+    https://github.com/nlohmann/json
+
+  miniaudio (MIT-0 / public domain dual-license)
+    Vendored audio capture/playback. Source at src/backend/third_party/miniaudio.h.
+    https://github.com/mackron/miniaudio
+
+  FFTW3 (GPL v2-or-later, OR paid commercial license from MIT)
+    Optional FFT backend, enabled via -DUSE_FFTW=ON. Not bundled. When linked,
+    the resulting BINARY inherits GPL v2 terms — it cannot be redistributed
+    under MIT. The project source remains MIT regardless of this flag.
+    https://www.fftw.org/
+
+  KFR (GPL v2-or-later, OR paid commercial license)
+    Optional FFT backend, enabled via -DUSE_KFR=ON. Same caveat as FFTW: when
+    linked, the resulting binary is GPL v2 and cannot be redistributed under
+    MIT.
+    https://github.com/kfrlib/kfr
+
+  uWebSockets / uSockets (Apache 2.0)
+    Optional WebSocket server, installed system-wide via setup.sh. When
+    absent, a built-in fallback server is used.
+    https://github.com/uNetworking/uWebSockets
+
+  GoogleTest (BSD-3-Clause)
+    Test framework, fetched at test-build time only. Not present in any
+    shipped artifact.
+    https://github.com/google/googletest
+
+  Electron, React, and other npm dependencies — licensed under their
+  respective terms as recorded in their package.json manifests.

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { T } from "../../lib/tokens.js";
 import { Sel, Btn, Section, NumInput } from "../controls.jsx";
 
@@ -57,10 +56,17 @@ export function InputTab({
   backendConnected,
   sampleRate,
   onSampleRate,
+  // The active source label. Owned by the parent and persisted there
+  // so navigating away from this tab doesn't reset the selection.
+  source = "websocket",
   onSource,
   onOpenFile,
   onReconnect,
   connColor,
+  // File replay speed multiplier (1.0 = real-time). Only meaningful
+  // when the file source is active; backend ignores it otherwise.
+  replaySpeed = 1.0,
+  onReplaySpeed,
   // Listen-source state. Wire format is documented in
   // src/backend/source/iq_listener.hpp.
   listenPort = 5555,
@@ -75,19 +81,13 @@ export function InputTab({
   onListenCenterFreq,
   onListenExpectHeader,
 }) {
-  const [source, setSource] = useState(backendConnected ? "websocket" : "simulated");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Section label="Source">
         <Sel
           label=""
           value={source}
-          onChange={(v) => {
-            setSource(v);
-            if (v === "simulated" || v === "websocket") return;
-            if (v === "file") return; // Browse button handles the command
-            onSource(v);
-          }}
+          onChange={(v) => onSource?.(v)}
           options={[
             { value: "websocket", label: "WebSocket (C++ Backend)" },
             { value: "mic", label: "Microphone" },
@@ -98,13 +98,31 @@ export function InputTab({
           ]}
         />
         {source === "file" && (
-          <Btn
-            onClick={onOpenFile}
-            active
-            style={{ marginTop: 6, width: "100%", justifyContent: "center" }}
-          >
-            Browse…
-          </Btn>
+          <>
+            <Btn
+              onClick={onOpenFile}
+              active
+              style={{ marginTop: 6, width: "100%", justifyContent: "center" }}
+            >
+              Browse…
+            </Btn>
+            <div style={{ marginTop: 6 }}>
+              <NumInput
+                label="Replay speed"
+                value={replaySpeed}
+                onChange={onReplaySpeed}
+                min={0.1}
+                max={32}
+                step={0.1}
+                suffix="×"
+                width={60}
+              />
+              <div style={{ fontSize: 9, color: T.textMuted, marginTop: 4 }}>
+                Multiplies the file's natural sample rate. Higher = more
+                FFTs per wall-clock second at large fft_size.
+              </div>
+            </div>
+          </>
         )}
         {source === "listen" && (
           <ListenPanel

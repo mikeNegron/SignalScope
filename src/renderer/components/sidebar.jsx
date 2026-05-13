@@ -28,11 +28,14 @@ export function Sidebar({
   onClearF2,
   onClearCursors,
   // InputTab
+  source,
   onSource,
   onOpenFile,
   onSampleRate,
   onReconnect,
   connColor,
+  replaySpeed,
+  onReplaySpeed,
   listenPort,
   listenFormat,
   listenSampleRate,
@@ -157,10 +160,13 @@ export function Sidebar({
             backendConnected={backendConnected}
             sampleRate={sampleRate}
             onSampleRate={onSampleRate}
+            source={source}
             onSource={onSource}
             onOpenFile={onOpenFile}
             onReconnect={onReconnect}
             connColor={connColor}
+            replaySpeed={replaySpeed}
+            onReplaySpeed={onReplaySpeed}
             listenPort={listenPort}
             listenFormat={listenFormat}
             listenSampleRate={listenSampleRate}
