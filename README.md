@@ -1,4 +1,4 @@
-# Note: License is GLPv2 at the moment. Working on adding the MIT version.
+# Note: License is GPLv2 at the moment. Working on adding the MIT version.
 
 # SignalScope
 
