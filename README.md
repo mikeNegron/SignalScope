@@ -1,3 +1,5 @@
+# Note: License is GLPv2 at the moment. Working on adding the MIT version.
+
 # SignalScope
 
 A browser-class signal analyzer with a native C++ DSP backend, packaged as a single distributable file.
