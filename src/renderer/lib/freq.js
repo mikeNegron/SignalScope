@@ -50,7 +50,26 @@ export function tToBin(t, dataLength) {
   return Math.max(0, Math.min(n - 1, idx));
 }
 
-/// Map a bin index to absolute frequency.
+/// Map a bin index to its fractional x position in the plot. This is the
+/// *visual* convention used by SpectrumRenderer's vertex shader
+/// (`t = a_idx / u_len`), so any overlay that draws on top of the spectrum
+/// (peak markers, cursors, fundamental bars) must use this helper to land
+/// on the same pixel column as the spectrum line for the same bin.
+///
+/// Note this differs from `binToFreq`, which intentionally uses the
+/// center-of-bin convention `(bin + 0.5)/N` because it answers a *labeling*
+/// question ("what Hz value best represents this bin's frequency interval"),
+/// not a *placement* question.
+export function binToT(bin, dataLength) {
+  const n = Math.max(1, dataLength | 0);
+  return bin / n;
+}
+
+/// Map a bin index to absolute frequency. Uses the center-of-bin convention
+/// `(bin + 0.5)/N` because it answers a *labeling* question ("what Hz value
+/// best represents this bin's frequency interval"). For *visual placement*
+/// on the spectrum plot, use `binToT` instead - the two conventions are
+/// intentionally different.
 export function binToFreq(bin, dataLength, sampleRate, centerFreq, twoSided) {
   const t = (bin + 0.5) / dataLength;
   return tToFreq(t, sampleRate, centerFreq, twoSided);

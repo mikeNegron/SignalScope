@@ -9,13 +9,33 @@ import { useEffect, useRef, useState } from 'react';
 const NS = 'signalscope.settings.';
 const PERSIST_VERSION = 1;
 
+// Coerce a loaded value to the type of `defaultValue` so prior schema
+// shapes don't bleed through. Without this, a setting whose UI control
+// used to store strings (e.g., a <select> whose onChange forgot to
+// parseInt) keeps round-tripping as a string, and any backend handler
+// that JSON-parses it as a number throws type_error.302. Coercing
+// preserves the user's intent across schema drift, where bumping
+// PERSIST_VERSION would silently wipe their preference.
+function coerceToDefaultType(value, defaultValue) {
+  if (typeof value === typeof defaultValue) return value;
+  switch (typeof defaultValue) {
+    case 'number': {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : defaultValue;
+    }
+    case 'boolean': return Boolean(value);
+    case 'string':  return String(value);
+    default:        return value;  // objects/arrays: leave the schema match to the caller
+  }
+}
+
 function readPersisted(key, defaultValue) {
   try {
     const raw = window.localStorage.getItem(NS + key);
     if (raw == null) return defaultValue;
     const parsed = JSON.parse(raw);
     if (parsed?.v !== PERSIST_VERSION) return defaultValue;
-    return parsed.d;
+    return coerceToDefaultType(parsed.d, defaultValue);
   } catch {
     return defaultValue;
   }

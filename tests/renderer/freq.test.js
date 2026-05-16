@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LOG_FMIN_HZ,
   binToFreq,
+  binToT,
   fmtFreqLong,
   fmtFreqShort,
   freqToT,
@@ -179,5 +180,38 @@ describe('fmtFreqLong', () => {
   });
   it('handles non-finite input gracefully', () => {
     expect(fmtFreqLong(NaN)).toBe('-');
+  });
+});
+
+// `binToT` is the *visual* bin -> fraction-t mapping that matches the
+// spectrum vertex shader (LINE_VERT in SpectrumRenderer.js: t = a_idx / u_len).
+// This is the convention any overlay must follow to land on the same pixel
+// column as the spectrum line for the same bin. Distinct from `binToFreq`,
+// which uses (bin + 0.5)/N because it asks a different question -- "what
+// representative Hz value should I label this bin with" -- and the
+// center-of-interval is the conventional answer there.
+describe('binToT - visual bin to t-fraction (shader-aligned)', () => {
+  it('maps bin 0 to t=0 (left edge of plot)', () => {
+    expect(binToT(0, 2048)).toBe(0);
+  });
+  it('maps the last bin to t=(N-1)/N (one bin short of the right edge)', () => {
+    expect(binToT(2047, 2048)).toBe(2047 / 2048);
+  });
+  it('places quarter / half / three-quarter bins at t = 0.25 / 0.5 / 0.75', () => {
+    // Anchor points derived from intent, not implementation: bin N/4 must
+    // land at the 25% pixel column of the plot, etc. A test written as
+    // `binToT(k,N) === k/N` would silently follow any change to the formula
+    // - this one breaks if anyone shifts the convention.
+    const N = 2048;
+    expect(binToT(N / 4, N)).toBe(0.25);
+    expect(binToT(N / 2, N)).toBe(0.5);
+    expect(binToT((3 * N) / 4, N)).toBe(0.75);
+  });
+  it('does NOT add the half-bin offset that binToFreq uses', () => {
+    // The original peak-marker bug used (bin + 0.5)/N here - binToT must
+    // never adopt that offset, or markers will drift off the spectrum line.
+    const k = 853, N = 2048;
+    expect(binToT(k, N)).not.toBe((k + 0.5) / N);
+    expect(binToT(k, N)).toBe(k / N);
   });
 });

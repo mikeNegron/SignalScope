@@ -6,7 +6,7 @@
 import { _compile, _link, hexRGBA } from './TextRenderer.js';
 import { T, PEAK_PALETTE } from '../lib/tokens.js';
 import { ML, MR, MT, MB } from './GridRenderer.js';
-import { freqToT } from '../lib/freq.js';
+import { binToT, freqToT } from '../lib/freq.js';
 
 const VERT = `#version 300 es
 in vec2 a_pos;
@@ -131,10 +131,10 @@ export class OverlayRenderer {
 
     for (let i = 0; i < peaks.length; i++) {
       const { binIdx, value, N } = peaks[i];
-      // bin index is always linear (the spectrum array is linearly
-      // indexed). Convert bin -> Hz -> screen-t so the marker sits on the
-      // currently-selected axis (linear or log).
-      const t = (binIdx + 0.5) / N;
+      // Use the shader-aligned bin->t convention so the marker lands on the
+      // same pixel column as the spectrum line's peak for this bin. See
+      // binToT() in lib/freq.js for why this is NOT (bin + 0.5)/N.
+      const t = binToT(binIdx, N);
       const f = twoSided
         ? centerFreq + (t - 0.5) * sampleRate
         : t * (sampleRate / 2);
