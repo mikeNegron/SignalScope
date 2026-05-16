@@ -43,6 +43,7 @@
 #include "util/ring_buffer.hpp"
 #include "dsp/fft/fft_backend.hpp"
 #include "dsp/dsp_pipeline.hpp"
+#include "dsp/simd_ops.hpp"
 #include "dsp/downconverter.hpp"
 #include "dsp/hilbert.hpp"
 #include "dsp/weighting.hpp"
@@ -81,6 +82,12 @@ namespace signalscope
         std::atomic<bool> running{true};
         std::atomic<bool> paused{false};
         std::atomic<size_t> frame_counter{0};
+
+        // Set by ws_thread_func if listen/bind fails. Main thread polls
+        // this after spawning ws_thread_func and shuts down cleanly if
+        // it's set. Stable line "[ws] fatal:" is written to stderr in
+        // the same code path so Electron's stdout parser can detect it.
+        std::atomic<bool> ws_fatal{false};
 
         // Source mode: "mic", "test", "file"
         std::string source_mode = "test";
@@ -474,12 +481,15 @@ namespace signalscope
                 // bins the backend deliberately silenced (e.g. DC for
                 // two-sided plots) and we skip those so they don't pull
                 // the floor to negative infinity.
-                float spec_min = std::numeric_limits<float>::infinity();
-                float spec_max = -std::numeric_limits<float>::infinity();
-                for (float v : spectrum_vec) {
-                    if (v < spec_min && v > -1e30f) spec_min = v;
-                    if (v > spec_max && v <  1e30f) spec_max = v;
-                }
+                // SIMD-vectorized min/max with sentinel exclusion. The
+                // backend writes ±1e30f to deliberately silenced bins
+                // (e.g. DC in two-sided plots); those must not pull the
+                // running min/max. simd::min_max_filtered's scalar
+                // reference matches the prior loop's semantics 1:1.
+                float spec_min, spec_max;
+                signalscope::simd::min_max_filtered(
+                    spectrum_vec.data(), spectrum_vec.size(),
+                    -1e30f, 1e30f, spec_min, spec_max);
                 if (!std::isfinite(spec_min) || !std::isfinite(spec_max)
                     || spec_max <= spec_min) {
                     spec_min = -130.0f;
@@ -1072,7 +1082,13 @@ namespace signalscope
         // no mutex is required for this vector.
         std::vector<ActiveWS *> clients;
 
-        struct TimerData { AppState *state; std::vector<ActiveWS *> *clients; };
+        struct TimerData {
+            AppState *state;
+            std::vector<ActiveWS *> *clients;
+            us_listen_socket_t *listen_socket;  // populated after .listen() succeeds
+        };
+
+        us_listen_socket_t *listen_socket_ref = nullptr;
 
         auto app = uWS::App()
             .ws<PerSocketData>("/*", {
@@ -1101,25 +1117,57 @@ namespace signalscope
                     if (it != clients.end()) clients.erase(it);
                 }
             })
-            .listen(state.ws_port, [port = state.ws_port](auto *listen_socket) {
-                if (listen_socket) {
-                    std::cout << "[ws] Listening on port " << port << std::endl;
-                } else {
-                    std::cerr << "[ws] Failed to listen on port " << port << '\n';
+            .listen(state.ws_port, [&state, &listen_socket_ref](auto *listen_socket) {
+                if (!listen_socket) {
+                    std::cerr << "[ws] fatal: listen failed on port "
+                              << state.ws_port
+                              << " (already in use or permission denied)"
+                              << std::endl;
+                    state.ws_fatal.store(true, std::memory_order_release);
+                    return;
                 }
+                listen_socket_ref = listen_socket;
+                std::cout << "[ws] Listening on port " << state.ws_port << std::endl;
             });
+
+        if (state.ws_fatal.load(std::memory_order_acquire)) {
+            return;  // bail out of ws_thread_func; main thread will join.
+        }
 
         // Timer: send frames directly to every connected socket at ~60 fps.
         auto *loop = reinterpret_cast<us_loop_t *>(uWS::Loop::get());
         auto *timer = us_create_timer(loop, 0, sizeof(TimerData));
         auto *td = static_cast<TimerData *>(us_timer_ext(timer));
-        td->state   = &state;
-        td->clients = &clients;
+        td->state         = &state;
+        td->clients       = &clients;
+        td->listen_socket = listen_socket_ref;
 
         us_timer_set(timer, [](us_timer_t *t) {
             try {
                 auto *td = static_cast<TimerData *>(us_timer_ext(t));
                 AppState *s = td->state;
+
+                // Graceful shutdown: when state.running goes false (signal handler
+                // set it), close everything so app.run() returns. Without this, the
+                // uWS loop has no path to exit on SIGTERM and the process can only
+                // die via the parent's SIGKILL fallback (3 s in Electron's main.js
+                // stopBackend) — see docs/superpowers/plans/2026-05-14-backend-
+                // lifecycle-fixes.md for the broader picture.
+                if (!s->running.load(std::memory_order_relaxed)) {
+                    // .close callbacks mutate *clients, so iterate over a snapshot.
+                    auto clients_snapshot = *td->clients;
+                    // Best-effort: a throw from any single close() must not stop the
+                    // rest of the shutdown sequence.
+                    for (auto *ws : clients_snapshot) {
+                        try { ws->close(); } catch (...) {}
+                    }
+                    if (td->listen_socket) {
+                        us_listen_socket_close(/*ssl=*/0, td->listen_socket);
+                        td->listen_socket = nullptr;
+                    }
+                    us_timer_close(t);
+                    return;
+                }
 
                 if (td->clients->empty()) return;
                 if (!s->outputs.ready.load(std::memory_order_acquire)) return;
@@ -1251,10 +1299,18 @@ namespace signalscope
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = htons(state.ws_port);
         if (bind(server_fd, (sockaddr *)&addr, sizeof(addr)) < 0) {
-            log_syscall_err("[ws] bind"); close(server_fd); return;
+            std::cerr << "[ws] fatal: bind failed on port " << state.ws_port
+                      << " (" << std::strerror(errno) << ")" << std::endl;
+            state.ws_fatal.store(true, std::memory_order_release);
+            close(server_fd);
+            return;
         }
         if (listen(server_fd, 16) < 0) {
-            log_syscall_err("[ws] listen"); close(server_fd); return;
+            std::cerr << "[ws] fatal: listen failed on port " << state.ws_port
+                      << " (" << std::strerror(errno) << ")" << std::endl;
+            state.ws_fatal.store(true, std::memory_order_release);
+            close(server_fd);
+            return;
         }
         // Non-blocking listen so accept() returns immediately when nothing
         // is pending; non-blocking client fds so a slow consumer can't stall
@@ -1596,7 +1652,14 @@ int main(int argc, char *argv[])
     std::thread fft_warmup(signalscope::fft_warmup_thread);
 
     // WS server runs on the main thread (owns its own event loop).
+    // ws_thread_func() returns early if state.ws_fatal was set (bind/listen
+    // failure on either the uWS or simple-WS path). Detect that here so we
+    // log the fatal-shutdown reason before the normal teardown runs.
     signalscope::ws_thread_func(state);
+
+    if (state.ws_fatal.load(std::memory_order_acquire)) {
+        std::cerr << "[main] shutting down due to ws_fatal" << std::endl;
+    }
 
     state.running.store(false);
     dsp.join();

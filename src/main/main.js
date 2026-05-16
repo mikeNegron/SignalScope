@@ -11,15 +11,17 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 
 function getBackendPath() {
+  // Explicit override (used by E2E tests to target a specific backend variant).
+  if (process.env.SIGNALSCOPE_BACKEND_BIN) {
+    return process.env.SIGNALSCOPE_BACKEND_BIN;
+  }
   const isPackaged = app.isPackaged;
   const ext = process.platform === "win32" ? ".exe" : "";
   const binaryName = `signalscope-backend${ext}`;
 
   if (isPackaged) {
-    // In production: binary is in extraResources/backend/
     return path.join(process.resourcesPath, "backend", binaryName);
   } else {
-    // In development: binary is in build/backend/
     return path.join(__dirname, "..", "..", "build", "backend", binaryName);
   }
 }
@@ -111,6 +113,37 @@ function loadSigmfMeta(dataPath) {
 let backendProcess = null;
 let backendPort = 8765;
 
+// Deferred Promise that resolves with { ready: true, port } once the
+// backend prints "[ws] Listening on port N", or { ready: false, reason }
+// if "[ws] fatal:" appears or the process exits / times out.
+let backendReadyPromise = Promise.resolve({ ready: false, reason: "not-spawned" });
+let backendReadyResolve = null;
+let backendReadyTimer = null;
+const BACKEND_READY_TIMEOUT_MS = 5000;
+
+function resetBackendReadyPromise() {
+  // Clear any stale timer from a prior spawn cycle so it can't fire
+  // against the new Promise and clobber an otherwise-successful spawn.
+  if (backendReadyTimer) {
+    clearTimeout(backendReadyTimer);
+    backendReadyTimer = null;
+  }
+  backendReadyPromise = new Promise((resolve) => {
+    backendReadyResolve = resolve;
+  });
+}
+
+function settleBackendReady(result) {
+  if (backendReadyResolve) {
+    if (backendReadyTimer) {
+      clearTimeout(backendReadyTimer);
+      backendReadyTimer = null;
+    }
+    backendReadyResolve(result);
+    backendReadyResolve = null;
+  }
+}
+
 function startBackend() {
   const backendPath = getBackendPath();
 
@@ -121,6 +154,13 @@ function startBackend() {
   }
 
   console.log(`Starting backend: ${backendPath}`);
+
+  // Arm the readiness Promise BEFORE spawning so any early stdout/stderr
+  // chunks from the child have something to resolve into.
+  resetBackendReadyPromise();
+  backendReadyTimer = setTimeout(() => {
+    settleBackendReady({ ready: false, reason: "timeout" });
+  }, BACKEND_READY_TIMEOUT_MS);
 
   backendProcess = spawn(backendPath, [`--port=${backendPort}`], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -145,19 +185,46 @@ function startBackend() {
         });
       }
     }
+
+    // Resolve the readiness Promise once the backend confirms it's bound
+    // to the port. The "[ws] Listening on port" line is emitted from
+    // backend/main.cpp for both uWS and simple-WS code paths.
+    if (msg.includes("[ws] Listening on port") && backendReadyResolve) {
+      settleBackendReady({ ready: true, port: backendPort });
+    }
   });
 
   backendProcess.stderr.on("data", (data) => {
-    console.error(`[backend:err] ${data.toString().trim()}`);
+    const text = data.toString();
+    console.error(`[backend:err] ${text.trim()}`);
+
+    // A "[ws] fatal:" line means listen()/bind() failed; the backend
+    // will shortly exit with ws_fatal. Settle the Promise now so the
+    // renderer gets a fast "not running" answer rather than waiting
+    // the full 5 s timeout.
+    if (text.includes("[ws] fatal:") && backendReadyResolve) {
+      settleBackendReady({ ready: false, reason: "fatal: " + text.trim() });
+    }
   });
 
   backendProcess.on("exit", (code, signal) => {
     console.log(`Backend exited: code=${code} signal=${signal}`);
+    // If we never saw a "Listening" line, the process died before binding
+    // its port - surface that to the IPC handler rather than hanging.
+    if (backendReadyResolve) {
+      settleBackendReady({
+        ready: false,
+        reason: `exited-before-listening (code ${code})`,
+      });
+    }
     backendProcess = null;
   });
 
   backendProcess.on("error", (err) => {
     console.error("Failed to start backend:", err.message);
+    if (backendReadyResolve) {
+      settleBackendReady({ ready: false, reason: `spawn-error: ${err.message}` });
+    }
     backendProcess = null;
   });
 
@@ -165,19 +232,25 @@ function startBackend() {
 }
 
 function stopBackend() {
-  if (backendProcess) {
-    console.log("Stopping backend...");
-    // Send SIGTERM for graceful shutdown
-    backendProcess.kill("SIGTERM");
-
-    // Force kill after 3 seconds if still alive
-    setTimeout(() => {
-      if (backendProcess) {
-        backendProcess.kill("SIGKILL");
-        backendProcess = null;
-      }
-    }, 3000);
-  }
+  if (!backendProcess) return Promise.resolve();
+  console.log("Stopping backend...");
+  // Resolve when the process actually exits. The existing
+  // backendProcess.on("exit", ...) handler (inside startBackend)
+  // nulls backendProcess on exit — we just await the OS event.
+  const proc = backendProcess;
+  const done = new Promise((resolve) => proc.once("exit", resolve));
+  proc.kill("SIGTERM");
+  // SIGKILL backstop in case the child ignores SIGTERM. With the uWS
+  // shutdown fix in src/backend/main.cpp, this should never fire for
+  // first-party builds; keep it as defense-in-depth against a hung child.
+  // Cancel the timer when the process exits cleanly — otherwise we'd
+  // keep the event loop alive for 3 s after every stop and silently
+  // SIGKILL a dead PID (ESRCH, swallowed below).
+  const killTimer = setTimeout(() => {
+    try { proc.kill("SIGKILL"); } catch {}  // proc may already be dead (ESRCH)
+  }, 3000);
+  proc.once("exit", () => clearTimeout(killTimer));
+  return done;
 }
 
 let mainWindow = null;
@@ -198,6 +271,9 @@ function createWindow() {
       sandbox: true,
     },
     frame: false,
+    // E2E tests set SIGNALSCOPE_E2E=1 so the window stays off-screen
+    // instead of blocking the developer's desktop on every run.
+    show: process.env.SIGNALSCOPE_E2E !== "1",
   });
 
   const isDev = process.env.NODE_ENV === "development";
@@ -246,25 +322,40 @@ app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("enable-zero-copy");
 
 app.whenReady().then(() => {
-  ipcMain.handle("get-backend-config", () => ({
-    wsUrl: `ws://localhost:${backendPort}`,
-    port: backendPort,
-    running: backendProcess !== null,
-  }));
-
-  ipcMain.handle("restart-backend", () => {
-    stopBackend();
-    setTimeout(() => startBackend(), 500);
-    return { success: true };
+  ipcMain.handle("get-backend-config", async () => {
+    // Block the renderer's reply until the backend confirms it's actually
+    // listening on the port (or until the readiness Promise settles with a
+    // fatal / timeout / exit reason). Without this await the renderer would
+    // race the backend and connect to a not-yet-listening port, fall back
+    // to simulation, and never re-try - see C5 in the 2026-05-13 review.
+    const result = await backendReadyPromise;
+    if (result.ready) {
+      return {
+        wsUrl: `ws://localhost:${result.port}`,
+        port: result.port,
+        running: true,
+      };
+    }
+    return {
+      wsUrl: `ws://localhost:${backendPort}`,
+      port: backendPort,
+      running: false,
+      reason: result.reason,
+    };
   });
 
-  ipcMain.handle("start-backend", () => {
+  ipcMain.handle("restart-backend", async () => {
+    await stopBackend();
+    return { success: startBackend() };
+  });
+
+  ipcMain.handle("start-backend", async () => {
     if (backendProcess) return { success: true, already: true };
     return { success: startBackend() };
   });
 
-  ipcMain.handle("stop-backend", () => {
-    stopBackend();
+  ipcMain.handle("stop-backend", async () => {
+    await stopBackend();
     return { success: true };
   });
 
@@ -307,18 +398,33 @@ app.whenReady().then(() => {
   ipcMain.handle("window:toggle-maximize", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
-    if (win.isMaximized()) {
-      win.unmaximize();
+    // On Linux we use setBounds() rather than win.maximize(), so the native
+    // isMaximized() bit never flips — track our own pseudo-maximized flag.
+    // Also send window:state-change directly from the handler regardless of
+    // platform, so the renderer titlebar updates even when the OS-level
+    // maximize/unmaximize events don't fire (e.g. show:false in E2E tests).
+    const wasMaximized = win.__pseudoMaximized === true || win.isMaximized();
+    if (wasMaximized) {
+      if (win.__prevBounds) {
+        win.setBounds(win.__prevBounds);
+        win.__prevBounds = null;
+      } else if (win.isMaximized()) {
+        win.unmaximize();
+      }
+      win.__pseudoMaximized = false;
+      win.webContents.send("window:state-change", { maximized: false });
     } else {
-      // On Linux, win.maximize() doesn't reliably cover the full screen with
-      // frame:false + XWayland, so we set bounds manually from the screen API.
       if (process.platform === "linux") {
+        // On Linux, win.maximize() doesn't reliably cover the full screen
+        // with frame:false + XWayland, so we set bounds manually.
+        win.__prevBounds = win.getBounds();
         const { workArea } = screen.getDisplayMatching(win.getBounds());
         win.setBounds(workArea);
-        win.webContents.send("window:state-change", { maximized: true });
       } else {
         win.maximize();
       }
+      win.__pseudoMaximized = true;
+      win.webContents.send("window:state-change", { maximized: true });
       win.focus();
     }
   });
@@ -347,19 +453,37 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("window-all-closed", () => {
-  stopBackend();
+app.on("window-all-closed", async () => {
+  await stopBackend();
   if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
 app.on("before-quit", () => {
-  stopBackend();
+  // Best-effort synchronous SIGTERM. The async stopBackend can't complete
+  // here because app.quit() is on the call stack. The will-quit handler
+  // (added next) is the hard backstop that prevents orphan child processes.
+  if (backendProcess) {
+    try { backendProcess.kill("SIGTERM"); } catch {}  // may already be dead
+  }
+});
+
+app.on("will-quit", () => {
+  // Last resort: hard-kill the backend if SIGTERM didn't take effect
+  // before Electron's main process tears down. Without this, an
+  // unresponsive backend (e.g. older builds without the uWS shutdown
+  // fix) survives as an orphan zombie holding port 8765.
+  if (backendProcess) {
+    try { backendProcess.kill("SIGKILL"); } catch {}  // may already be dead
+  }
 });
 
 // Handle uncaught exceptions gracefully
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err);
-  stopBackend();
+  // Fire-and-forget: the process is already in a fatal state, we just
+  // want to kick off the SIGTERM. The will-quit SIGKILL backstop will
+  // catch the child even if this Promise never settles.
+  stopBackend().catch(() => {});
 });
