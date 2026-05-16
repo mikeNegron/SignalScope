@@ -237,6 +237,7 @@ export function SettingsTab({
             onClick={() => onExport?.("wav", "waveform")}
             active={!!waveformData && !!onExport}
             title="Waveform -> WAV float32 (backend write)"
+            testid="export-wav"
           >
             WAV
           </Btn>
@@ -244,16 +245,18 @@ export function SettingsTab({
             onClick={() => onExport?.("csv", "spectrum")}
             active={!!spectrumData && !!onExport}
             title="Spectrum -> CSV (backend write)"
+            testid="export-csv"
           >
             CSV
           </Btn>
-          <Btn onClick={exportPNG} active title="Screenshot largest canvas">
+          <Btn onClick={exportPNG} active title="Screenshot largest canvas" testid="export-png">
             PNG
           </Btn>
           <Btn
             onClick={() => onExport?.("aiff", "waveform")}
             active={!!waveformData && !!onExport}
             title="Waveform -> AIFF int16 (backend write)"
+            testid="export-aiff"
           >
             AIFF
           </Btn>
@@ -261,6 +264,7 @@ export function SettingsTab({
             onClick={() => onExport?.("raw", "spectrum")}
             active={!!spectrumData && !!onExport}
             title="Spectrum -> raw float32 (backend write)"
+            testid="export-raw"
           >
             RAW
           </Btn>

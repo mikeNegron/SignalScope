@@ -20,27 +20,37 @@ function ListenPanel({
                              "Stopped";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-      <NumInput label="Port"   value={port}       onChange={onPort}       min={1}    max={65535} step={1} width={70} />
-      <Sel
-        label="Format (default)"
-        value={String(format)}
-        onChange={(v) => onFormat(parseInt(v, 10))}
-        options={[
-          { value: "0", label: "u8 IQ (RTL-SDR)" },
-          { value: "1", label: "i16 IQ" },
-          { value: "2", label: "f32 IQ" },
-          { value: "3", label: "f32 real" },
-        ]}
-      />
-      <NumInput label="SR (default)" value={sampleRate} onChange={onSampleRate} min={1} max={3e9} step={1} suffix="Hz" width={90} />
-      <NumInput label="CF (default)" value={centerFreq} onChange={onCenterFreq} min={0} max={4.29e9} step={1} suffix="Hz" width={90} />
-      <Btn
-        active={expectHeader}
-        onClick={() => onExpectHeader(!expectHeader)}
-        title="When on, the publisher must send a 16-byte SS01 header. When off, raw bytes are decoded with the defaults above."
-      >
-        {expectHeader ? "Expect header: ON" : "Expect header: OFF"}
-      </Btn>
+      <span data-testid="listen-port" style={{ display: "contents" }}>
+        <NumInput label="Port"   value={port}       onChange={onPort}       min={1}    max={65535} step={1} width={70} />
+      </span>
+      <span data-testid="listen-format" style={{ display: "contents" }}>
+        <Sel
+          label="Format (default)"
+          value={String(format)}
+          onChange={(v) => onFormat(parseInt(v, 10))}
+          options={[
+            { value: "0", label: "u8 IQ (RTL-SDR)" },
+            { value: "1", label: "i16 IQ" },
+            { value: "2", label: "f32 IQ" },
+            { value: "3", label: "f32 real" },
+          ]}
+        />
+      </span>
+      <span data-testid="listen-sr" style={{ display: "contents" }}>
+        <NumInput label="SR (default)" value={sampleRate} onChange={onSampleRate} min={1} max={3e9} step={1} suffix="Hz" width={90} />
+      </span>
+      <span data-testid="listen-cf" style={{ display: "contents" }}>
+        <NumInput label="CF (default)" value={centerFreq} onChange={onCenterFreq} min={0} max={4.29e9} step={1} suffix="Hz" width={90} />
+      </span>
+      <span data-testid="listen-expect-header" style={{ display: "contents" }}>
+        <Btn
+          active={expectHeader}
+          onClick={() => onExpectHeader(!expectHeader)}
+          title="When on, the publisher must send a 16-byte SS01 header. When off, raw bytes are decoded with the defaults above."
+        >
+          {expectHeader ? "Expect header: ON" : "Expect header: OFF"}
+        </Btn>
+      </span>
       <div style={{
         display: "flex", alignItems: "center", gap: 6,
         fontSize: 9, fontFamily: T.font, color: statusColor, marginTop: 2,
@@ -84,28 +94,32 @@ export function InputTab({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Section label="Source">
-        <Sel
-          label=""
-          value={source}
-          onChange={(v) => onSource?.(v)}
-          options={[
-            { value: "websocket", label: "WebSocket (C++ Backend)" },
-            { value: "mic", label: "Microphone" },
-            { value: "test", label: "Test Signal" },
-            { value: "file", label: "File Input" },
-            { value: "listen", label: "Listen (TCP)" },
-            ...(!backendConnected ? [{ value: "simulated", label: "Simulated" }] : []),
-          ]}
-        />
+        <span data-testid="source-select" style={{ display: "contents" }}>
+          <Sel
+            label=""
+            value={source}
+            onChange={(v) => onSource?.(v)}
+            options={[
+              { value: "websocket", label: "WebSocket (C++ Backend)" },
+              { value: "mic", label: "Microphone" },
+              { value: "test", label: "Test Signal" },
+              { value: "file", label: "File Input" },
+              { value: "listen", label: "Listen (TCP)" },
+              ...(!backendConnected ? [{ value: "simulated", label: "Simulated" }] : []),
+            ]}
+          />
+        </span>
         {source === "file" && (
           <>
-            <Btn
-              onClick={onOpenFile}
-              active
-              style={{ marginTop: 6, width: "100%", justifyContent: "center" }}
-            >
-              Browse…
-            </Btn>
+            <span data-testid="browse-file" style={{ display: "contents" }}>
+              <Btn
+                onClick={onOpenFile}
+                active
+                style={{ marginTop: 6, width: "100%", justifyContent: "center" }}
+              >
+                Browse…
+              </Btn>
+            </span>
             <div style={{ marginTop: 6 }}>
               <NumInput
                 label="Replay speed"
@@ -152,6 +166,7 @@ export function InputTab({
         />
       </Section>
       <div
+        data-testid="connection-pill"
         style={{
           background: T.bgElev,
           border: `1px solid ${connColor}33`,
@@ -184,6 +199,7 @@ export function InputTab({
           </div>
           {!backendConnected && onReconnect && (
             <button
+              data-testid="reconnect-button"
               onClick={onReconnect}
               style={{
                 background: T.primaryDim + "33",

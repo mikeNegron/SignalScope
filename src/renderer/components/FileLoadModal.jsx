@@ -42,6 +42,7 @@ export function FileLoadModal({ filePath, format, hint, onSubmit, onCancel }) {
 
   return (
     <div
+      data-testid="file-load-modal"
       onClick={onCancel}
       style={{
         position: "fixed", inset: 0,
@@ -80,6 +81,7 @@ export function FileLoadModal({ filePath, format, hint, onSubmit, onCancel }) {
 
         <Field label="Sample rate (Hz)">
           <input
+            data-testid="file-load-samplerate"
             type="number"
             min={1}
             value={sampleRate}
@@ -95,6 +97,7 @@ export function FileLoadModal({ filePath, format, hint, onSubmit, onCancel }) {
 
         <Field label="Datatype (SigMF style)">
           <select
+            data-testid="file-load-datatype"
             value={datatype}
             onChange={(e) => setDatatype(e.target.value)}
             style={inputStyle}
@@ -108,6 +111,7 @@ export function FileLoadModal({ filePath, format, hint, onSubmit, onCancel }) {
 
         <Field label="Channels">
           <input
+            data-testid="file-load-channels"
             type="number"
             min={1}
             max={16}
@@ -128,12 +132,14 @@ export function FileLoadModal({ filePath, format, hint, onSubmit, onCancel }) {
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button
+            data-testid="file-load-cancel"
             onClick={onCancel}
             style={btnStyle(false)}
           >
             Cancel
           </button>
           <button
+            data-testid="file-load-submit"
             onClick={() => valid && onSubmit({
               datatype,
               sample_rate: Number(sampleRate),

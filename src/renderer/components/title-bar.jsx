@@ -8,16 +8,22 @@ export function TitleBar() {
   }, []);
 
   return (
-    <div className={`app-titlebar${maximized ? " app-titlebar--maximized" : ""}`}>
+    <div
+      data-testid="titlebar-root"
+      data-maximized={maximized ? "1" : "0"}
+      className={`app-titlebar${maximized ? " app-titlebar--maximized" : ""}`}
+    >
       <div className="app-titlebar-title" />
       <div className="app-titlebar-controls">
         <button
+          data-testid="titlebar-minimize"
           className="titlebar-button"
           onClick={() => window.signalscope?.minimizeWindow()}
         >
           −
         </button>
         <button
+          data-testid="titlebar-maximize"
           className="titlebar-button"
           onClick={() => window.signalscope?.toggleMaximizeWindow()}
           title={maximized ? "Restore" : "Maximize"}
@@ -25,6 +31,7 @@ export function TitleBar() {
           {maximized ? "❐" : "□"}
         </button>
         <button
+          data-testid="titlebar-close"
           className="titlebar-button titlebar-button-close"
           onClick={() => window.signalscope?.closeWindow()}
         >

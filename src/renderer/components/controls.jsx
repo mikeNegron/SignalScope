@@ -173,11 +173,12 @@ export function Knob({
   );
 }
 
-export function Btn({ children, active, onClick, color, style: s, title: ti }) {
+export function Btn({ children, active, onClick, color, style: s, title: ti, testid }) {
   return (
     <button
       onClick={onClick}
       title={ti}
+      data-testid={testid}
       style={{
         background: active ? (color || T.primaryDim) + "33" : "transparent",
         color: active ? color || T.primary : T.textMuted,

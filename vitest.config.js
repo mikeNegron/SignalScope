@@ -4,7 +4,7 @@
 // to 'jsdom' and add `@testing-library/react`.
 export default {
   test: {
-    include: ['tests/renderer/**/*.test.js'],
+    include: ['tests/renderer/**/*.test.js', 'tests/integration/**/*.test.js'],
     environment: 'node',
   },
 };

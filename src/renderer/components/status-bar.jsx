@@ -33,13 +33,13 @@ export function StatusBar({
         </span>
         <span style={{ fontFamily: T.font, fontSize: 9, color: T.textMuted }}>
           Bin:{" "}
-          <span style={{ color: T.textMid }}>
+          <span data-testid="status-sample-rate" style={{ color: T.textMid }}>
             {(sampleRate / +fftSize).toFixed(2)} Hz
           </span>
         </span>
         <span style={{ fontFamily: T.font, fontSize: 9, color: T.textMuted }}>
           Src:{" "}
-          <span style={{ color: backendConnected ? T.success : T.orange }}>
+          <span data-testid="status-source-label" style={{ color: backendConnected ? T.success : T.orange }}>
             {srcLabel}
           </span>
         </span>
@@ -61,7 +61,7 @@ export function StatusBar({
         </span>
         <span style={{ fontFamily: T.font, fontSize: 9, color: T.textMuted }}>
           Frame:{" "}
-          <span style={{ color: T.textMid }}>
+          <span data-testid="status-frame-id" style={{ color: T.textMid }}>
             {backendConnected ? backendFrameId : Math.floor(timeRef.current * 20)}
           </span>
         </span>

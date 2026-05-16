@@ -85,6 +85,7 @@ export function Sidebar({
 }) {
   return (
     <div
+      data-testid="sidebar-root"
       style={{
         width: sbW,
         display: "flex",
@@ -98,6 +99,7 @@ export function Sidebar({
         {TABS.map((t) => (
           <button
             key={t}
+            data-testid={`sidebar-tab-${t}`}
             onClick={() => onSidebarTab(t)}
             style={{
               flex: 1,
