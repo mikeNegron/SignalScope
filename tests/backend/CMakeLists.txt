@@ -104,6 +104,10 @@ signalscope_add_test(test_ring_buffer test_ring_buffer.cpp)
 # Equalization curves (A/C-weight, flatten). Pure-function, no FFT.
 signalscope_add_test(test_weighting test_weighting.cpp)
 
+# Correctness tests for SIMD-vectorized DSP helpers. Compare each
+# SIMD entry point against its scalar reference on deterministic input.
+signalscope_add_test(test_simd_ops test_simd_ops.cpp)
+
 # DSPPipeline overlap (FFT window stride / slide buffer).
 signalscope_add_test(test_overlap test_overlap.cpp)
 signalscope_link_fft_backend(test_overlap)
@@ -131,6 +135,21 @@ signalscope_add_test(test_iq_listener test_iq_listener.cpp)
 # no sockets — pure in-process unit tests on IFftBackend.
 signalscope_add_test(test_fft_backends test_fft_backends.cpp)
 signalscope_link_fft_backend(test_fft_backends)
+
+# Microbench binary. Not registered with gtest_discover_tests — it's a
+# standalone executable invoked manually (or by scripts/bench_dsp.sh).
+add_executable(bench_dsp_pipeline bench_dsp_pipeline.cpp)
+target_include_directories(bench_dsp_pipeline PRIVATE ${BACKEND_SRC})
+signalscope_link_fft_backend(bench_dsp_pipeline)
+# Match the production backend's optimization flags so the bench numbers
+# are representative of what ships. Without -march=native the bench
+# would run with the baseline x86-64 ISA and produce numbers that
+# don't reflect production performance.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(bench_dsp_pipeline PRIVATE -O3 -march=native)
+elseif(MSVC)
+    target_compile_options(bench_dsp_pipeline PRIVATE /O2 /arch:AVX2)
+endif()
 
 # Integration tests
 # These spawn a real backend subprocess. The binary location can be

@@ -12,6 +12,7 @@
 #include <string>
 #include "protocol/protocol.hpp"
 #include "dsp/fft/fft_backend.hpp"
+#include "dsp/simd_ops.hpp"
 
 namespace signalscope {
     struct Config {
@@ -131,11 +132,12 @@ public:
         // to its old behavior.
         std::size_t scan_len;       // how much of `input` is "fresh" (clip-tested)
         if (overlap_factor_ == 1) {
-            for (size_t i = 0; i < N && i < input_len; i++)
-                in_real[i] = input[i] * window_coeffs_[i] * gain_linear;
-            for (size_t i = input_len; i < N; i++)
+            const size_t apply_len = std::min(N, input_len);
+            simd::window_apply(input.data(), window_coeffs_.data(),
+                               in_real, apply_len, gain_linear);
+            for (size_t i = apply_len; i < N; i++)
                 in_real[i] = 0.0f;
-            scan_len = std::min(N, input_len);
+            scan_len = apply_len;
         } else {
             // Slide left by hop, append new samples to the tail.
             const size_t hop = N / overlap_factor_;
@@ -145,8 +147,8 @@ public:
             const size_t fresh = std::min(hop, input_len);
             for (size_t i = 0; i < fresh; i++) slide_real_[keep + i] = input[i];
             for (size_t i = fresh; i < hop;  i++) slide_real_[keep + i] = 0.0f;
-            for (size_t i = 0; i < N; i++)
-                in_real[i] = slide_real_[i] * window_coeffs_[i] * gain_linear;
+            simd::window_apply(slide_real_.data(), window_coeffs_.data(),
+                               in_real, N, gain_linear);
             scan_len = fresh;
         }
 
@@ -198,12 +200,10 @@ public:
             // Dividing by coherent_gain_ compensates for window attenuation -
             // makes a unit-amplitude tone read 0 dBFS regardless of window.
             const float norm = 2.0f / (static_cast<float>(N) * coherent_gain_);
-            for (size_t i = 0; i < halfN; i++) {
-                float re = out_r2c[i].real() * norm;
-                float im = out_r2c[i].imag() * norm;
-                float mag = std::sqrt(re * re + im * im);
-                magnitude_[i] = (mag > 1e-10f) ? 20.0f * std::log10(mag) : -200.0f;
-            }
+            // out_r2c is std::complex<float>* — same memory layout as
+            // an interleaved float pair, so the cast is safe.
+            simd::magnitude_db(reinterpret_cast<const float*>(out_r2c),
+                               magnitude_.data(), halfN, norm);
         }
 
         if (config_.avg_count > 1) {
@@ -227,9 +227,7 @@ public:
                 peak_hold_.assign(magnitude_.begin(), magnitude_.end());
                 peak_hold_seeded_ = true;
             } else {
-                for (size_t i = 0; i < halfN; i++) {
-                    if (magnitude_[i] > peak_hold_[i]) peak_hold_[i] = magnitude_[i];
-                }
+                simd::max_inplace(magnitude_.data(), peak_hold_.data(), halfN);
             }
         }
 
@@ -371,10 +369,8 @@ public:
                     peak_hold_full_.assign(magnitude_full_.begin(), magnitude_full_.end());
                     peak_hold_full_seeded_ = true;
                 } else {
-                    for (size_t i = 0; i < N; i++) {
-                        if (magnitude_full_[i] > peak_hold_full_[i])
-                            peak_hold_full_[i] = magnitude_full_[i];
-                    }
+                    simd::max_inplace(magnitude_full_.data(),
+                                      peak_hold_full_.data(), N);
                 }
             }
             return magnitude_full_;
@@ -415,10 +411,8 @@ public:
                 peak_hold_full_.assign(magnitude_full_.begin(), magnitude_full_.end());
                 peak_hold_full_seeded_ = true;
             } else {
-                for (size_t i = 0; i < N; i++) {
-                    if (magnitude_full_[i] > peak_hold_full_[i])
-                        peak_hold_full_[i] = magnitude_full_[i];
-                }
+                simd::max_inplace(magnitude_full_.data(),
+                                  peak_hold_full_.data(), N);
             }
             // magnitude_full_ is intentionally left as the live trace - see
             // the real-path comment above.
