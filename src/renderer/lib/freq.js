@@ -61,8 +61,17 @@ export function tToBin(t, dataLength) {
 /// question ("what Hz value best represents this bin's frequency interval"),
 /// not a *placement* question.
 export function binToT(bin, dataLength) {
-  const n = Math.max(1, dataLength | 0);
-  return bin / n;
+  // The spectrum shader places vertex k at t = k / (N - 1), so an
+  // N-length spectrum drawn as N vertices spans t=0..1 exactly. Match
+  // that convention so peak markers land on the same pixel column as
+  // the spectrum line's peak for the same bin. The Math.max(2, ...)
+  // clamp prevents divide-by-zero when dataLength <= 1 (a 1-bin
+  // spectrum has no meaningful t-axis; returning bin/1 = 0 for the
+  // only bin is the least-surprising result). Note `tToBin` uses
+  // Math.max(1, ...) because its `n - 1` is inside a clamp, not a
+  // divisor -- don't "unify" the two without preserving that.
+  const n = Math.max(2, dataLength | 0);
+  return bin / (n - 1);
 }
 
 /// Map a bin index to absolute frequency. Uses the center-of-bin convention

@@ -184,34 +184,53 @@ describe('fmtFreqLong', () => {
 });
 
 // `binToT` is the *visual* bin -> fraction-t mapping that matches the
-// spectrum vertex shader (LINE_VERT in SpectrumRenderer.js: t = a_idx / u_len).
-// This is the convention any overlay must follow to land on the same pixel
-// column as the spectrum line for the same bin. Distinct from `binToFreq`,
-// which uses (bin + 0.5)/N because it asks a different question -- "what
-// representative Hz value should I label this bin with" -- and the
+// spectrum vertex shader (SpectrumRenderer.js LINE_VERT with
+// `u_len = N - 1` and `t = a_idx / u_len`). For an N-length spectrum
+// drawn as a LINE_STRIP of N vertices, bin k lands at t = k / (N - 1):
+// bin 0 at t=0 (left edge), bin N-1 at t=1 (right edge). Distinct from
+// `binToFreq`, which uses (bin + 0.5)/N because it asks a *labeling*
+// question ("what Hz value represents this bin's interval") -- the
 // center-of-interval is the conventional answer there.
 describe('binToT - visual bin to t-fraction (shader-aligned)', () => {
   it('maps bin 0 to t=0 (left edge of plot)', () => {
     expect(binToT(0, 2048)).toBe(0);
   });
-  it('maps the last bin to t=(N-1)/N (one bin short of the right edge)', () => {
-    expect(binToT(2047, 2048)).toBe(2047 / 2048);
+  it('maps the last bin (N-1) to t=1 (right edge of plot)', () => {
+    expect(binToT(2047, 2048)).toBe(1);
   });
-  it('places quarter / half / three-quarter bins at t = 0.25 / 0.5 / 0.75', () => {
-    // Anchor points derived from intent, not implementation: bin N/4 must
-    // land at the 25% pixel column of the plot, etc. A test written as
-    // `binToT(k,N) === k/N` would silently follow any change to the formula
-    // - this one breaks if anyone shifts the convention.
-    const N = 2048;
-    expect(binToT(N / 4, N)).toBe(0.25);
-    expect(binToT(N / 2, N)).toBe(0.5);
-    expect(binToT((3 * N) / 4, N)).toBe(0.75);
+  it('maps the midpoint bin to exactly t=0.5', () => {
+    // Exact midpoint requires N odd so (N-1)/2 is an integer.
+    const N = 2049;
+    expect(binToT((N - 1) / 2, N)).toBe(0.5);
+  });
+  it('round-trips against the shader: binToT(k, N) * (N - 1) === k', () => {
+    // The shader vertex shader does t = a_idx / u_len with u_len = N-1,
+    // so multiplying t back by (N - 1) must recover the integer bin
+    // index. This is the property the shader uses, expressed as a
+    // round-trip -- it would fail if anyone changed binToT to bin/N
+    // (round-trip would give k*(N-1)/N != k) or to (bin+0.5)/N.
+    for (const N of [256, 1024, 2048, 4096]) {
+      for (const k of [0, 1, 7, (N - 1) / 2 | 0, N - 2, N - 1]) {
+        expect(binToT(k, N) * (N - 1)).toBeCloseTo(k, 9);
+      }
+    }
   });
   it('does NOT add the half-bin offset that binToFreq uses', () => {
-    // The original peak-marker bug used (bin + 0.5)/N here - binToT must
-    // never adopt that offset, or markers will drift off the spectrum line.
+    // The original peak-marker bug used (bin + 0.5)/N here. binToT must
+    // never adopt that offset, or markers will drift off the spectrum
+    // line.
     const k = 853, N = 2048;
     expect(binToT(k, N)).not.toBe((k + 0.5) / N);
-    expect(binToT(k, N)).toBe(k / N);
+  });
+  it('does not divide by zero when dataLength is 1', () => {
+    // Defensive clamp: a one-bin spectrum is degenerate, but the helper
+    // should not return NaN or Infinity. Returning 0 (the left edge) is
+    // the least-surprising result for any caller.
+    expect(binToT(0, 1)).toBe(0);
+  });
+  it('does not divide by zero when dataLength is 0', () => {
+    // Matches tToBin's defensive contract (see tests above) - guards
+    // renderer paths during reconnection where arrays are briefly empty.
+    expect(binToT(0, 0)).toBe(0);
   });
 });

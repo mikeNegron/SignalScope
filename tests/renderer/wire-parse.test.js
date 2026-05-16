@@ -271,10 +271,33 @@ describe('parseFrame - SpectrumStats (0x08)', () => {
     parseFrame(b, makeFrame(0x08, 0, 0, 0, 48000, [-50, 100])); // too short
     expect(b.noiseFloor).toBe(-77); // unchanged
   });
-  it('uses spectrumHold length for N if hold is active', () => {
+  it('uses live spectrum length for N (never the spectrumHold buffer)', () => {
+    // The peak bin indices are computed against the current spectrum_vec
+    // on the backend in the same DSP frame as the spectrum payload. The
+    // live spectrum's length is therefore the authoritative N. The hold
+    // buffer can be stale (a different size from a previous configuration
+    // that the user toggled hold OFF after).
     const b = freshBuf();
+    parseFrame(b, makeFrame(0x00, 0, 0, 0, 48000, new Array(2048).fill(-120)));
     parseFrame(b, makeFrame(0x07, 0, 0, 0, 48000, new Array(1024).fill(-120)));
     parseFrame(b, makeFrame(0x08, 0, 0, 0, 48000, [-95, 0, 1, 50, -10, 80]));
-    expect(b.peaks[0].N).toBe(1024);
+    expect(b.peaks[0].N).toBe(2048);
+  });
+  it('regression: stale spectrumHold does NOT override the live spectrum length', () => {
+    // Bug fixture: peak hold was previously ON at fft=8192, then user
+    // toggled hold OFF and loaded a file whose auto-fft is 4096. The
+    // hold buffer is frozen at 8192 because nothing resizes it after
+    // hold-OFF. wire-parse must STILL pick N=4096 from the live spectrum.
+    const b = freshBuf();
+    parseFrame(b, makeFrame(0x07, 0, 0, 0, 48000, new Array(8192).fill(-120))); // stale hold
+    parseFrame(b, makeFrame(0x00, 0, 0, 0, 48000, new Array(4096).fill(-120))); // live spec
+    // binIdx 5000 is OUT of range for the live N=4096 but IN range for
+    // the stale hold N=8192. Round-tripping unchanged proves the parser
+    // is reading the bin straight from the wire without "helpful"
+    // clamping against either length - if anyone ever adds a guard like
+    // `binIdx = Math.min(binIdx, N - 1)`, this assertion fires.
+    parseFrame(b, makeFrame(0x08, 0, 0, 0, 48000, [-95, 0, 1, 5000, -10, 80]));
+    expect(b.peaks[0].N).toBe(4096);
+    expect(b.peaks[0].binIdx).toBe(5000);
   });
 });

@@ -233,7 +233,7 @@ function startBackend() {
 
 function stopBackend() {
   if (!backendProcess) return Promise.resolve();
-  console.log("Stopping backend...");
+  console.log("[ss] Stopping backend...");
   // Resolve when the process actually exits. The existing
   // backendProcess.on("exit", ...) handler (inside startBackend)
   // nulls backendProcess on exit — we just await the OS event.

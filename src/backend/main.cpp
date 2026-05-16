@@ -13,6 +13,7 @@
 #include <mutex>
 #include <span>
 #include <string>
+#include <syncstream>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
@@ -187,11 +188,17 @@ namespace signalscope
         float sample_rate = 48000.0f;
     };
 
+    // Worker-thread console writes use std::osyncstream (C++20 <syncstream>) so
+    // that operator<< chains from different threads can't interleave on the same
+    // stream. Main-thread writes (the device listing + version banner near the
+    // bottom of this file) do not need it -- they run before any worker thread
+    // starts.
+
     // DSP Thread
     // Pulls samples, runs FFT, writes output frames.
     void dsp_thread_func(AppState &state)
     {
-        std::cout << "[ws] DSP thread started" << std::endl;
+        std::osyncstream(std::cout) << "[ss] DSP thread started" << std::endl;
 
         const auto frame_interval = std::chrono::microseconds(
             1000000 / state.target_fps);
@@ -656,7 +663,7 @@ namespace signalscope
             }
         }
 
-        std::cout << "[ws] DSP thread stopped" << std::endl;
+        std::osyncstream(std::cout) << "[ss] DSP thread stopped" << std::endl;
     }
 
     // Command dispatch — one function per command, registered in
@@ -677,8 +684,8 @@ namespace signalscope
         state.capture_buffer.reset();
         if (!state.iq_listener.start(port, state.listen_defaults,
                                      state.capture_buffer)) {
-            std::cerr << "[ws] iq_listener.start failed: "
-                      << state.iq_listener.last_error() << '\n';
+            std::osyncstream(std::cerr) << "[ws] iq_listener.start failed: "
+                                        << state.iq_listener.last_error() << '\n';
         }
     }
 
@@ -763,7 +770,7 @@ namespace signalscope
         const std::string path   = j.value("path",   std::string{});
         const std::string source = j.value("source", std::string{});
         if (path.empty()) {
-            std::cout << "[export] empty path, skipping" << std::endl;
+            std::osyncstream(std::cout) << "[export] empty path, skipping" << std::endl;
             return;
         }
         std::vector<uint8_t> bytes;
@@ -773,8 +780,8 @@ namespace signalscope
             else if (source == "waveform") bytes = state.outputs.wave;
         }
         if (bytes.size() <= sizeof(FrameHeader)) {
-            std::cout << "[export] no " << source << " data available yet"
-                      << std::endl;
+            std::osyncstream(std::cout) << "[export] no " << source << " data available yet"
+                                        << std::endl;
             return;
         }
         FrameHeader hdr{};
@@ -788,9 +795,9 @@ namespace signalscope
         else if (format == "raw")  ok = write_raw_float32(path, payload);
         else if (format == "wav")  ok = write_wav_float32(path, payload, hdr.sample_rate);
         else if (format == "aiff") ok = write_aiff_int16(path, payload, hdr.sample_rate);
-        std::cout << "[export] " << format << ' ' << source << " -> " << path
-                  << " (" << payload.size() << " floats) "
-                  << (ok ? "ok" : "FAILED") << std::endl;
+        std::osyncstream(std::cout) << "[export] " << format << ' ' << source << " -> " << path
+                                    << " (" << payload.size() << " floats) "
+                                    << (ok ? "ok" : "FAILED") << std::endl;
     }
     static void set_taper_count(AppState& state, const json& j) {
         std::lock_guard<std::mutex> lock(state.dsp_mutex);
@@ -956,13 +963,13 @@ namespace signalscope
         }
 
         if (req.path.empty()) {
-            std::cerr << "[ws] load_file: missing path\n";
+            std::osyncstream(std::cerr) << "[ws] load_file: missing path\n";
             return;
         }
         state.file_source.stop();
         auto decoder = build_decoder(req);
         if (!decoder) {
-            std::cerr << "[ws] load_file: failed to build decoder\n";
+            std::osyncstream(std::cerr) << "[ws] load_file: failed to build decoder\n";
             return;
         }
         state.source_is_complex.store(decoder->is_complex(),
@@ -1041,7 +1048,7 @@ namespace signalscope
         try {
             j = json::parse(msg);
         } catch (const std::exception& e) {
-            std::cerr << "[ws] malformed JSON: " << e.what() << '\n';
+            std::osyncstream(std::cerr) << "[ws] malformed JSON: " << e.what() << '\n';
             return;
         }
         const std::string cmd = j.value("cmd", std::string{});
@@ -1050,7 +1057,7 @@ namespace signalscope
         const auto& table = command_table();
         const auto it = table.find(std::string_view{cmd});
         if (it == table.end()) {
-            std::cerr << "[ws] unknown command: " << cmd << '\n';
+            std::osyncstream(std::cerr) << "[ws] unknown command: " << cmd << '\n';
             return;
         }
         // Per-handler try/catch so a malformed value (e.g. wrong type
@@ -1059,8 +1066,8 @@ namespace signalscope
         try {
             it->second(state, j);
         } catch (const std::exception& e) {
-            std::cerr << "[ws] command '" << cmd << "' failed: "
-                      << e.what() << '\n';
+            std::osyncstream(std::cerr) << "[ws] command '" << cmd << "' failed: "
+                                        << e.what() << '\n';
         }
     }
 
@@ -1074,8 +1081,8 @@ namespace signalscope
 
     void ws_thread_func(AppState &state)
     {
-        std::cout << "[ws] Thread started on port " << state.ws_port
-                  << std::endl;
+        std::osyncstream(std::cout) << "[ws] Thread started on port " << state.ws_port
+                                    << std::endl;
 
         // Track live sockets for direct delivery - no pub/sub subscription needed.
         // All uWS callbacks and the timer fire on the same event-loop thread, so
@@ -1101,7 +1108,7 @@ namespace signalscope
                 .sendPingsAutomatically   = false, // not needed with idleTimeout=0
 
                 .open = [&clients](ActiveWS *ws) noexcept {
-                    std::cout << "[ws] Client connected" << std::endl;
+                    std::osyncstream(std::cout) << "[ws] Client connected" << std::endl;
                     try { clients.push_back(ws); } catch (...) {}
                 },
 
@@ -1111,23 +1118,35 @@ namespace signalscope
                     }
                 },
 
-                .close = [&clients](ActiveWS *ws, int code, std::string_view) noexcept {
-                    std::cerr << "[ws] Client disconnected (" << code << ")\n";
+                .close = [&clients, &state](ActiveWS *ws, int code, std::string_view) noexcept {
+                    // Suppress the log entirely while shutting down: state.running is
+                    // already false because the signal handler / Electron-side stopBackend
+                    // tripped it, so every client disconnect at this point is expected
+                    // (we explicitly call ws->close() on each one below). Logging them as
+                    // [backend:err] on stderr surfaces them in Electron's child-stderr pipe
+                    // and looks like a real error in the developer's terminal.
+                    //
+                    // A renderer crash *before* SIGTERM still logs (to stdout below) -
+                    // intentional, so genuine crashes stay observable.
+                    if (state.running.load(std::memory_order_relaxed)) {
+                        // Use stdout to match the [ws] Client connected log channel.
+                        std::osyncstream(std::cout) << "[ws] Client disconnected (" << code << ")\n";
+                    }
                     auto it = std::find(clients.begin(), clients.end(), ws);
                     if (it != clients.end()) clients.erase(it);
                 }
             })
             .listen(state.ws_port, [&state, &listen_socket_ref](auto *listen_socket) {
                 if (!listen_socket) {
-                    std::cerr << "[ws] fatal: listen failed on port "
-                              << state.ws_port
-                              << " (already in use or permission denied)"
-                              << std::endl;
+                    std::osyncstream(std::cerr) << "[ws] fatal: listen failed on port "
+                                                << state.ws_port
+                                                << " (already in use or permission denied)"
+                                                << std::endl;
                     state.ws_fatal.store(true, std::memory_order_release);
                     return;
                 }
                 listen_socket_ref = listen_socket;
-                std::cout << "[ws] Listening on port " << state.ws_port << std::endl;
+                std::osyncstream(std::cout) << "[ss] Listening on port " << state.ws_port << std::endl;
             });
 
         if (state.ws_fatal.load(std::memory_order_acquire)) {
@@ -1240,7 +1259,7 @@ namespace signalscope
         }, 16, 16); // ~60 fps
 
         app.run();
-        std::cout << "[ws] Thread stopped" << std::endl;
+        std::osyncstream(std::cout) << "[ws] Thread stopped" << std::endl;
     }
 
 #else
@@ -1279,13 +1298,13 @@ namespace signalscope
     // because both reads and writes use MSG_DONTWAIT.
     void ws_thread_func(AppState &state)
     {
-        std::cout << "[ws] Simple WebSocket server starting on port "
-                  << state.ws_port << std::endl;
+        std::osyncstream(std::cout) << "[ws] Simple WebSocket server starting on port "
+                                    << state.ws_port << std::endl;
 
         // Small helper: stringify errno the std::cerr way, since perror()
         // doesn't compose with the iostreams pipeline we use elsewhere.
         auto log_syscall_err = [](const char* what) {
-            std::cerr << what << ": " << std::strerror(errno) << '\n';
+            std::osyncstream(std::cerr) << what << ": " << std::strerror(errno) << '\n';
         };
 
         int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -1299,15 +1318,15 @@ namespace signalscope
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = htons(state.ws_port);
         if (bind(server_fd, (sockaddr *)&addr, sizeof(addr)) < 0) {
-            std::cerr << "[ws] fatal: bind failed on port " << state.ws_port
-                      << " (" << std::strerror(errno) << ")" << std::endl;
+            std::osyncstream(std::cerr) << "[ws] fatal: bind failed on port " << state.ws_port
+                                        << " (" << std::strerror(errno) << ")" << std::endl;
             state.ws_fatal.store(true, std::memory_order_release);
             close(server_fd);
             return;
         }
         if (listen(server_fd, 16) < 0) {
-            std::cerr << "[ws] fatal: listen failed on port " << state.ws_port
-                      << " (" << std::strerror(errno) << ")" << std::endl;
+            std::osyncstream(std::cerr) << "[ws] fatal: listen failed on port " << state.ws_port
+                                        << " (" << std::strerror(errno) << ")" << std::endl;
             state.ws_fatal.store(true, std::memory_order_release);
             close(server_fd);
             return;
@@ -1317,7 +1336,7 @@ namespace signalscope
         // the broadcast loop.
         fcntl(server_fd, F_SETFL, O_NONBLOCK);
 
-        std::cout << "[ws] Listening on port " << state.ws_port << std::endl;
+        std::osyncstream(std::cout) << "[ws] Listening on port " << state.ws_port << std::endl;
 
         std::vector<WSClient> clients;
         std::vector<pollfd>   pfds;
@@ -1420,8 +1439,14 @@ while (!drop && c.handshaked && !c.inbox.empty()) {
                 if (drop) {
                     close(c.fd);
                     clients.erase(clients.begin() + i);
-                    std::cout << "[ws] Client disconnected (" << clients.size()
-                              << " total)" << std::endl;
+                    // Mirror the uWS .close handler's shutdown-quiet guard (see the
+                    // stderr-channel rationale there). simple-WS already logs to stdout
+                    // so this is purely a noise reduction for the dev terminal, not a
+                    // stream-routing fix.
+                    if (state.running.load(std::memory_order_relaxed)) {
+                        std::osyncstream(std::cout) << "[ws] Client disconnected (" << clients.size()
+                                                    << " total)" << std::endl;
+                    }
                 } else {
                     ++i;
                 }
@@ -1436,8 +1461,8 @@ while (!drop && c.handshaked && !c.inbox.empty()) {
                     if (fd < 0) break;
                     fcntl(fd, F_SETFL, O_NONBLOCK);
                     clients.push_back({fd, /*handshaked*/ false, std::string{}});
-                    std::cout << "[ws] Client connected (" << clients.size()
-                              << " total)" << std::endl;
+                    std::osyncstream(std::cout) << "[ws] Client connected (" << clients.size()
+                                                << " total)" << std::endl;
                 }
             }
 
@@ -1487,8 +1512,8 @@ if (!clients.empty() &&
                     if (!ok) {
                         close(c.fd);
                         clients.erase(clients.begin() + i);
-                        std::cout << "[ws] Client send failed, dropped ("
-                                  << clients.size() << " total)" << std::endl;
+                        std::osyncstream(std::cout) << "[ws] Client send failed, dropped ("
+                                                    << clients.size() << " total)" << std::endl;
                     } else {
                         ++i;
                     }
@@ -1515,7 +1540,7 @@ if (!clients.empty() &&
 
         for (auto &c : clients) close(c.fd);
         close(server_fd);
-        std::cout << "[ws] Server stopped" << std::endl;
+        std::osyncstream(std::cout) << "[ws] Server stopped" << std::endl;
     }
 
 #endif // USE_SIMPLE_WS
@@ -1529,7 +1554,7 @@ static void signal_handler(int sig)
     // std::cout isn't async-signal-safe; printf is the conventional
     // shutdown-handler choice (glibc treats it as safe for line writes
     // even though POSIX doesn't formally guarantee it).
-    std::printf("\nReceived signal %d, shutting down...\n", sig);
+    std::printf("\n[ss] Received signal %d, shutting down...\n", sig);
     if (g_state) g_state->running.store(false);
 }
 
@@ -1658,7 +1683,7 @@ int main(int argc, char *argv[])
     signalscope::ws_thread_func(state);
 
     if (state.ws_fatal.load(std::memory_order_acquire)) {
-        std::cerr << "[main] shutting down due to ws_fatal" << std::endl;
+        std::osyncstream(std::cerr) << "[main] shutting down due to ws_fatal" << std::endl;
     }
 
     state.running.store(false);

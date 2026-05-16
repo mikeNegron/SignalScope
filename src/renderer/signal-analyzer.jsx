@@ -394,11 +394,27 @@ export default function SignalAnalyzer({
     setPeakHold((v) => {
       const next = !v;
       cmd?.("set_peak_hold", next);
+      // When hold turns OFF, the backend stops sending hold frames and
+      // buf.spectrumHold becomes stale -- it sits frozen at the size it
+      // had when hold was last ON. Null it so any code that reads
+      // .spectrumHold can tell the buffer no longer reflects current
+      // state. wire-parse's peak-N path already uses spectrum.length only,
+      // but this stays consistent with that contract.
+      if (!next && wsDataRef?.current) {
+        wsDataRef.current.spectrumHold = null;
+      }
       return next;
     });
   }, [cmd]);
   const hClearPeakHold = useCallback(() => {
     cmd?.("clear_peak_hold");
+    // Symmetric with hPeakHold's OFF branch -- a clear is conceptually a
+    // "throw away the held trace", so the renderer-side buffer must go
+    // too. Without this, the next render frame would briefly draw the
+    // previous held trace if the spectrum view is using it.
+    if (wsDataRef?.current) {
+      wsDataRef.current.spectrumHold = null;
+    }
   }, [cmd]);
 
   const hOpenFile = useCallback(async () => {

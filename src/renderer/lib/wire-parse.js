@@ -126,8 +126,14 @@ export function parseFrame(buf, arrayBuffer) {
       buf.noiseFloor      = payload[0];
       buf.fundamentalFreq = payload[1];
       const K = payload[2] | 0;
-      // Hold and live share length; either works as the N for peaks.
-      const N = (buf.spectrumHold?.length || buf.spectrum?.length || 0);
+      // Use the LIVE spectrum's length only. The backend computes peak
+      // bin indices against its current spectrum_vec in the same DSP
+      // frame, and the spectrum frame in this WS tick carries the
+      // corresponding payload, so buf.spectrum.length is authoritative.
+      // The hold buffer can be stale: nothing resizes it after the user
+      // toggles peak hold OFF, and a later config change (FFT size, file
+      // load) can leave buf.spectrumHold at the WRONG length.
+      const N = buf.spectrum?.length ?? 0;
       if (!Array.isArray(buf.peaks)) buf.peaks = [];
       buf.peaks.length = 0;
       for (let i = 0; i < K; i++) {
