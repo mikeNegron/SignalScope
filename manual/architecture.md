@@ -8,50 +8,7 @@ format (see [wire protocol](protocol.md)). The split lets you run either side
 in isolation: launch the backend headless, connect a browser, or develop the
 React UI against the simulation fallback with no backend at all.
 
-```mermaid
-flowchart TB
-    subgraph backend["C++ Backend (separate process)"]
-        direction LR
-        subgraph capture["Capture Thread"]
-            C1[miniaudio mic]
-            C2[file decoder]
-            C3[TCP IQ listener]
-            C4[test signal]
-        end
-        ring[("SPSC ring · 1M floats / ~21s @ 48 kHz<br/>drop-oldest overflow")]
-        subgraph dsp["DSP Thread"]
-            direction TB
-            D1[Hilbert? → DDC?]
-            D2[window → FFT<br/>overlap · multitaper]
-            D3[A/C-weight? → peaks<br/>noise floor · fundamental<br/>spec_min/max · history]
-            D1 --> D2 --> D3
-        end
-        subgraph ws["WebSocket Thread"]
-            W1[serialize binary frames]
-            W2[broadcast to clients · 60 fps]
-            W1 --> W2
-        end
-        capture --> ring --> dsp --> ws
-    end
-
-    subgraph renderer["React + WebGL2 Renderer"]
-        direction TB
-        R1[ws.onmessage → bufRef<br/>zero per-frame allocs]
-        R2[GPU RAF reads bufRef directly]
-        R3[Spectrum · Spectrogram · Waveform<br/>Phase · IQ · Histogram · Overlay · Text]
-        R4[React state at 4 Hz only]
-        R1 --> R2 --> R3
-        R1 --> R4
-    end
-
-    ws -->|"binary frames · ws://localhost:8765"| renderer
-    renderer -.->|"JSON commands"| ws
-
-    classDef thread fill:#161b22,stroke:#30363d,color:#e6edf3
-    classDef ringStyle fill:#0d2235,stroke:#58a6ff,color:#58a6ff
-    class capture,dsp,ws,renderer thread
-    class ring ringStyle
-```
+![SignalScope architecture: capture → ring → DSP → WebSocket → renderer](../assets/architecture.png)
 
 ## Process model
 

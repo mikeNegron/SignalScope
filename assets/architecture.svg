@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Source: <fill-in-figma-url>
+  Edit in Figma, then export this SVG and re-save the .fig.
+  See docs/superpowers/specs/2026-05-16-architecture-diagram-figma-redesign.md
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1700" width="1280" height="1700" font-family="Inter, 'IBM Plex Sans', system-ui, -apple-system, sans-serif">
+
+  <!-- =================== DEFS =================== -->
+  <defs>
+    <!-- Note: drop-shadow filters intentionally removed for Figma-importer compatibility.
+         Apply shadows post-import via Figma's Effects panel (Drop shadow). -->
+
+    <!-- Subtle inner gradient for card depth (top-edge highlight) -->
+    <linearGradient id="card-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Hero gradient (cyan tinted, top brighter) -->
+    <linearGradient id="hero-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#155e75"/>
+      <stop offset="100%" stop-color="#0c3a48"/>
+    </linearGradient>
+
+    <!-- Outer container gradient (very subtle elevation) -->
+    <linearGradient id="container-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d0d10"/>
+      <stop offset="100%" stop-color="#09090b"/>
+    </linearGradient>
+
+    <!-- Section group gradient (subtle inner panel) -->
+    <linearGradient id="group-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#121215"/>
+      <stop offset="100%" stop-color="#0e0e11"/>
+    </linearGradient>
+
+    <!-- Arrowheads -->
+    <marker id="arrow-neutral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#a1a1aa"/>
+    </marker>
+    <marker id="arrow-bright" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#e4e4e7"/>
+    </marker>
+    <marker id="arrow-cyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#52525b"/>
+    </marker>
+  </defs>
+
+  <!-- =================== BACKGROUND =================== -->
+  <g id="Background">
+    <rect width="1280" height="1700" fill="#09090b"/>
+  </g>
+
+  <!-- =================== BACKEND CONTAINER =================== -->
+  <g id="Backend Container">
+    <rect x="60" y="60" width="1160" height="1240" rx="24" fill="url(#container-grad)" stroke="#3f3f46" stroke-width="1"/>
+
+    <!-- Title block -->
+    <g id="Backend Title">
+      <text x="96" y="108" font-size="20" font-weight="700" fill="#fafafa" letter-spacing="-0.01em">C++ Backend Process</text>
+      <text x="96" y="132" font-size="12" font-weight="400" fill="#71717a" letter-spacing="0.02em">3 threads + listener · zero-allocation hot path</text>
+    </g>
+
+    <!-- ============ CAPTURE SECTION ============ -->
+    <g id="Capture Section">
+      <rect x="96" y="170" width="1088" height="170" rx="18" fill="url(#group-grad)" stroke="#27272a" stroke-width="1"/>
+      <text x="120" y="200" font-size="11" font-weight="600" fill="#a1a1aa" letter-spacing="0.18em">CAPTURE</text>
+
+      <!-- 4 source cards in a row -->
+      <g id="Capture Card miniaudio">
+        <rect x="130" y="225" width="240" height="90" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="130" y="225" width="240" height="90" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon mic" transform="translate(148, 249) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="2" width="6" height="11" rx="3"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+          <line x1="12" y1="18" x2="12" y2="22"/>
+          <line x1="8" y1="22" x2="16" y2="22"/>
+        </g>
+        <text x="250" y="262" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">miniaudio mic</text>
+        <text x="250" y="284" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">ALSA · CoreAudio · WASAPI</text>
+      </g>
+
+      <g id="Capture Card File">
+        <rect x="394" y="225" width="240" height="90" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="394" y="225" width="240" height="90" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon file-audio" transform="translate(412, 249) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v7"/>
+          <path d="M14 2v6h6"/>
+          <path d="M20 8v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3"/>
+          <path d="M7 15v3"/>
+          <path d="M10 13v7"/>
+          <path d="M13 15v3"/>
+        </g>
+        <text x="514" y="262" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">file decoder</text>
+        <text x="514" y="284" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">WAV · AIFF · SigMF · raw</text>
+      </g>
+
+      <g id="Capture Card TCP">
+        <rect x="658" y="225" width="240" height="90" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="658" y="225" width="240" height="90" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon network" transform="translate(676, 249) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="2" width="6" height="6" rx="1"/>
+          <rect x="2" y="16" width="6" height="6" rx="1"/>
+          <rect x="16" y="16" width="6" height="6" rx="1"/>
+          <path d="M5 16v-2a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/>
+          <path d="M12 12V8"/>
+        </g>
+        <text x="778" y="262" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">TCP IQ listener</text>
+        <text x="778" y="284" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">U8 · I16 · F32 IQ / Real</text>
+      </g>
+
+      <g id="Capture Card Test">
+        <rect x="922" y="225" width="240" height="90" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="922" y="225" width="240" height="90" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon activity" transform="translate(940, 249) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </g>
+        <text x="1042" y="262" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">test signal</text>
+        <text x="1042" y="284" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">tone + sweep + pulses</text>
+      </g>
+    </g>
+
+    <!-- Pipeline arrow: Capture → Ring -->
+    <g id="Arrow Capture to Ring">
+      <line x1="640" y1="350" x2="640" y2="392" stroke="#e4e4e7" stroke-width="2" marker-end="url(#arrow-bright)"/>
+    </g>
+
+    <!-- ============ RING BUFFER (HERO) ============ -->
+    <g id="Ring Buffer Hero">
+      <!-- Cylinder shape: rect body + top ellipse + bottom curve -->
+      <path d="M 500 425 C 500 408 580 408 640 408 C 700 408 780 408 780 425 L 780 535 C 780 552 700 552 640 552 C 580 552 500 552 500 535 Z"
+            fill="url(#hero-grad)" stroke="#22d3ee" stroke-width="2"/>
+      <path d="M 500 425 C 500 442 580 442 640 442 C 700 442 780 442 780 425"
+            fill="none" stroke="#22d3ee" stroke-width="2" stroke-opacity="0.7"/>
+      <text x="640" y="466" text-anchor="middle" font-size="14" font-weight="600" fill="#a5f3fc" letter-spacing="-0.005em">SPSC ring buffer</text>
+      <text x="640" y="488" text-anchor="middle" font-size="11" font-weight="400" fill="#67e8f9">1M floats · ~21s @ 48 kHz</text>
+      <text x="640" y="508" text-anchor="middle" font-size="11" font-weight="400" fill="#22d3ee" fill-opacity="0.7">drop-oldest overflow</text>
+    </g>
+
+    <!-- Pipeline arrow: Ring → DSP -->
+    <g id="Arrow Ring to DSP">
+      <line x1="640" y1="554" x2="640" y2="608" stroke="#e4e4e7" stroke-width="2" marker-end="url(#arrow-bright)"/>
+    </g>
+
+    <!-- ============ DSP SECTION ============ -->
+    <g id="DSP Section">
+      <rect x="96" y="620" width="1088" height="240" rx="18" fill="url(#group-grad)" stroke="#27272a" stroke-width="1"/>
+      <text x="120" y="650" font-size="11" font-weight="600" fill="#a1a1aa" letter-spacing="0.18em">DSP</text>
+
+      <!-- 3 stage cards horizontally -->
+      <g id="DSP Card Hilbert">
+        <rect x="130" y="685" width="320" height="140" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="130" y="685" width="320" height="140" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon audio-waveform" transform="translate(148, 709) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/>
+        </g>
+        <text x="290" y="722" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">Hilbert · DDC</text>
+        <text x="290" y="752" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">optional pre-stage</text>
+        <text x="290" y="778" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">analytic signal · tune + decimate</text>
+        <text x="290" y="800" text-anchor="middle" font-size="11" font-weight="400" fill="#71717a">(real input only)</text>
+      </g>
+
+      <g id="DSP Card FFT">
+        <rect x="480" y="685" width="320" height="140" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="480" y="685" width="320" height="140" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon bar-chart-3" transform="translate(498, 709) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3v18h18"/>
+          <path d="M7 16v-5"/>
+          <path d="M12 16V8"/>
+          <path d="M17 16v-3"/>
+        </g>
+        <text x="640" y="722" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">Window · FFT</text>
+        <text x="640" y="752" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">Hanning · Hamming · Blackman</text>
+        <text x="640" y="772" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">FlatTop · Kaiser · Rectangular</text>
+        <text x="640" y="800" text-anchor="middle" font-size="11" font-weight="400" fill="#71717a">overlap · multitaper K ∈ {1,2,4,8}</text>
+      </g>
+
+      <g id="DSP Card Analytics">
+        <rect x="830" y="685" width="320" height="140" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="830" y="685" width="320" height="140" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon target" transform="translate(848, 709) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="6"/>
+          <circle cx="12" cy="12" r="2"/>
+        </g>
+        <text x="990" y="722" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">Analytics</text>
+        <text x="990" y="752" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">peaks · noise floor · fundamental</text>
+        <text x="990" y="772" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">spec_min / spec_max</text>
+        <text x="990" y="800" text-anchor="middle" font-size="11" font-weight="400" fill="#71717a">→ deep-history ring</text>
+      </g>
+
+      <!-- Inter-stage arrows: D1 → D2 → D3 -->
+      <g id="DSP Inter-stage Arrows">
+        <line x1="450" y1="755" x2="476" y2="755" stroke="#a1a1aa" stroke-width="1.5" marker-end="url(#arrow-neutral)"/>
+        <line x1="800" y1="755" x2="826" y2="755" stroke="#a1a1aa" stroke-width="1.5" marker-end="url(#arrow-neutral)"/>
+      </g>
+    </g>
+
+    <!-- Pipeline arrow: DSP → WebSocket -->
+    <g id="Arrow DSP to WS">
+      <line x1="640" y1="868" x2="640" y2="908" stroke="#e4e4e7" stroke-width="2" marker-end="url(#arrow-bright)"/>
+    </g>
+
+    <!-- ============ WEBSOCKET SECTION ============ -->
+    <g id="WebSocket Section">
+      <rect x="96" y="920" width="1088" height="160" rx="18" fill="url(#group-grad)" stroke="#27272a" stroke-width="1"/>
+      <text x="120" y="950" font-size="11" font-weight="600" fill="#a1a1aa" letter-spacing="0.18em">WEBSOCKET</text>
+
+      <g id="WS Card Serialize">
+        <rect x="200" y="975" width="380" height="80" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="200" y="975" width="380" height="80" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon binary" transform="translate(218, 992) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="14" y="14" width="4" height="6" rx="0.5"/>
+          <rect x="6" y="4" width="4" height="6" rx="0.5"/>
+          <path d="M6 20h4"/>
+          <path d="M14 10h4"/>
+          <path d="M6 14h2v6"/>
+          <path d="M14 4h2v6"/>
+        </g>
+        <text x="390" y="1005" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">serialize binary frames</text>
+        <text x="390" y="1027" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">16-byte header + Float32 payload</text>
+      </g>
+
+      <g id="WS Card Broadcast">
+        <rect x="700" y="975" width="380" height="80" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+        <rect x="700" y="975" width="380" height="80" rx="14" fill="url(#card-grad)"/>
+        <g id="Icon radio-tower" transform="translate(718, 992) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/>
+          <path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/>
+          <circle cx="12" cy="9" r="2"/>
+          <path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/>
+          <path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/>
+          <path d="M9.5 18h5l1 4h-7Z"/>
+          <path d="m12 11 1 7"/>
+        </g>
+        <text x="890" y="1005" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">broadcast · 60 fps</text>
+        <text x="890" y="1027" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">drains history queue with live</text>
+      </g>
+
+      <g id="WS Inter-arrow">
+        <line x1="580" y1="1015" x2="696" y2="1015" stroke="#a1a1aa" stroke-width="1.5" marker-end="url(#arrow-neutral)"/>
+      </g>
+    </g>
+
+    <!-- Footer caption inside backend container -->
+    <text x="640" y="1230" text-anchor="middle" font-size="11" font-weight="500" fill="#a1a1aa" letter-spacing="0.05em">SPSC ring <tspan fill="#22d3ee" font-weight="600">→</tspan> DSP <tspan fill="#22d3ee" font-weight="600">→</tspan> WebSocket thread <tspan fill="#71717a" font-weight="400">(each step in its own thread)</tspan></text>
+  </g>
+
+  <!-- =================== CROSS-PROCESS DATA PATH =================== -->
+  <g id="Data Path Backend to Renderer">
+    <line x1="640" y1="1300" x2="640" y2="1378" stroke="#22d3ee" stroke-width="3" marker-end="url(#arrow-cyan)"/>
+    <rect x="500" y="1320" width="280" height="32" rx="16" fill="#09090b" stroke="#22d3ee" stroke-width="1"/>
+    <text x="640" y="1340" text-anchor="middle" font-size="12" font-weight="600" fill="#67e8f9">binary frames</text>
+    <text x="640" y="1354" text-anchor="middle" font-size="10" font-weight="400" fill="#a1a1aa" letter-spacing="0.05em">ws://localhost:8765</text>
+  </g>
+
+  <!-- =================== RETURN PATH (JSON commands) =================== -->
+  <g id="Return Path Renderer to Backend">
+    <path d="M 1040 1450 C 1180 1450 1245 1430 1245 1380 L 1245 1060 C 1245 1030 1230 1015 1184 1015"
+          fill="none" stroke="#52525b" stroke-width="1.5" stroke-dasharray="4 5" marker-end="url(#arrow-dim)"/>
+    <text x="1260" y="1220" font-size="11" font-weight="500" fill="#71717a" transform="rotate(-90 1260 1220)">JSON commands</text>
+  </g>
+
+  <!-- =================== RENDERER CONTAINER =================== -->
+  <g id="Renderer Container">
+    <rect x="240" y="1380" width="800" height="280" rx="24" fill="url(#container-grad)" stroke="#3f3f46" stroke-width="1"/>
+    <text x="276" y="1418" font-size="20" font-weight="700" fill="#fafafa" letter-spacing="-0.01em">React + WebGL2 Renderer</text>
+    <text x="276" y="1442" font-size="12" font-weight="400" fill="#71717a" letter-spacing="0.02em">zero per-frame allocations · 60 fps GPU loop · 4 Hz React state</text>
+
+    <!-- R1: onmessage → bufRef (entry point) -->
+    <g id="Renderer Card Onmessage">
+      <rect x="280" y="1480" width="280" height="76" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+      <rect x="280" y="1480" width="280" height="76" rx="14" fill="url(#card-grad)"/>
+      <g id="Icon arrow-down-to-line" transform="translate(298, 1497) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 17V3"/>
+        <path d="m6 11 6 6 6-6"/>
+        <path d="M19 21H5"/>
+      </g>
+      <text x="420" y="1510" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">onmessage → bufRef</text>
+      <text x="420" y="1532" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">zero per-frame allocs · stable preallocated buffer</text>
+    </g>
+
+    <!-- R2: GPU RAF (main draw path) -->
+    <g id="Renderer Card GPU RAF">
+      <rect x="280" y="1580" width="280" height="60" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+      <rect x="280" y="1580" width="280" height="60" rx="14" fill="url(#card-grad)"/>
+      <g id="Icon cpu" transform="translate(298, 1594) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="2"/>
+        <rect x="9" y="9" width="6" height="6"/>
+        <path d="M15 2v2"/>
+        <path d="M15 20v2"/>
+        <path d="M2 15h2"/>
+        <path d="M2 9h2"/>
+        <path d="M20 15h2"/>
+        <path d="M20 9h2"/>
+        <path d="M9 2v2"/>
+        <path d="M9 20v2"/>
+      </g>
+      <text x="420" y="1607" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">GPU RAF loop</text>
+      <text x="420" y="1626" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">reads bufRef directly</text>
+    </g>
+
+    <!-- R3: 7 panels (the visual surface) -->
+    <g id="Renderer Card Panels">
+      <rect x="600" y="1480" width="400" height="160" rx="14" fill="#33333a" stroke="#52525b" stroke-width="1"/>
+      <rect x="600" y="1480" width="400" height="160" rx="14" fill="url(#card-grad)"/>
+      <g id="Icon layout-grid" transform="translate(618, 1497) scale(0.667)" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/>
+        <rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/>
+        <rect x="14" y="14" width="7" height="7" rx="1"/>
+      </g>
+      <text x="800" y="1510" text-anchor="middle" font-size="14" font-weight="600" fill="#fafafa">7 panels</text>
+      <text x="800" y="1535" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">Spectrum · Spectrogram · Waveform</text>
+      <text x="800" y="1555" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">Phase · IQ · Histogram</text>
+      <text x="800" y="1575" text-anchor="middle" font-size="11" font-weight="400" fill="#a1a1aa">Overlay · Text</text>
+      <text x="800" y="1610" text-anchor="middle" font-size="10" font-weight="400" fill="#52525b" letter-spacing="0.06em">CANVAS · WEBGL2 · POOLED CONTEXTS</text>
+    </g>
+
+    <!-- Internal renderer arrows -->
+    <g id="Renderer Internal Arrows">
+      <line x1="420" y1="1556" x2="420" y2="1576" stroke="#a1a1aa" stroke-width="1.5" marker-end="url(#arrow-neutral)"/>
+      <line x1="560" y1="1518" x2="596" y2="1518" stroke="#a1a1aa" stroke-width="1.5" marker-end="url(#arrow-neutral)"/>
+    </g>
+  </g>
+
+  <!-- =================== LEGEND (bottom, subtle) =================== -->
+  <g id="Legend" opacity="0.7">
+    <text x="60" y="1690" font-size="10" font-weight="500" fill="#52525b" letter-spacing="0.06em">SIGNALSCOPE · ARCHITECTURE · v0.2</text>
+  </g>
+
+</svg>
