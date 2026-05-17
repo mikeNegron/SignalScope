@@ -14,6 +14,18 @@ import { DragHandle } from "./components/panels.jsx";
 import { RenderSurface } from "./components/RenderSurface.jsx";
 import { FileLoadModal } from "./components/FileLoadModal.jsx";
 
+// Per-setting clamp helpers. Used by both load-time validators (through
+// usePersistedState's opts.validate) and change handlers so the two
+// sides can't drift.
+const clampPeakMinLevel     = (v) => Math.max(-130, Math.min(0, +v));
+const clampReplaySpeed      = (v) => Math.max(0.1, Math.min(32, +v || 1.0));
+const clampHistoryChunk     = (v) => Math.max(64, Math.min(8192, Math.round(+v)));
+const clampHistoryCapacity  = (v) => Math.max(256, Math.min(65536, Math.round(+v)));
+const clampListenPort       = (v) => Math.max(1, Math.min(65535, Math.round(+v)));
+const clampListenFormat     = (v) => Math.max(0, Math.min(3, +v));
+const clampListenSampleRate = (v) => Math.max(1, Math.round(+v));
+const clampListenCenterFreq = (v) => Math.max(0, Math.round(+v));
+
 export default function SignalAnalyzer({
   simulationEnabled = true,
   backendConnected = false,
@@ -55,23 +67,39 @@ export default function SignalAnalyzer({
   const [tuneHz, setTuneHz] = usePersistedState("tuneHz", 0);
   const [decimation, setDecimation] = usePersistedState("decimation", 1);
   const [suppressImage, setSuppressImage] = usePersistedState("suppressImage", false);
-  const [peakMinLevel, setPeakMinLevel] = usePersistedState("peakMinLevel", -60);
+  const [peakMinLevel, setPeakMinLevel] = usePersistedState("peakMinLevel", -60, {
+    validate: clampPeakMinLevel,
+  });
   const [weighting, setWeighting] = usePersistedState("weighting", "none");
   const [overlap, setOverlap] = usePersistedState("overlap", 0);
   // File replay speed multiplier. 1× is real-time playback; higher
   // values play the file faster than recorded, lifting the FFT-rate
   // ceiling at large fft_size (samples arrive faster than 1× wall-clock).
-  const [replaySpeed, setReplaySpeed] = usePersistedState("replaySpeed", 1.0);
+  const [replaySpeed, setReplaySpeed] = usePersistedState("replaySpeed", 1.0, {
+    validate: clampReplaySpeed,
+  });
   const [taperCount, setTaperCount] = usePersistedState("taperCount", 1);
   // Deep-history scroll. Transient - resets when paused state ends.
   const [scrollOffset, setScrollOffset] = useState(0);
-  const [historyChunk, setHistoryChunk] = usePersistedState("historyChunk", 512);
-  const [historyCapacity, setHistoryCapacity] = usePersistedState("historyCapacity", 4096);
+  const [historyChunk, setHistoryChunk] = usePersistedState("historyChunk", 512, {
+    validate: clampHistoryChunk,
+  });
+  const [historyCapacity, setHistoryCapacity] = usePersistedState("historyCapacity", 4096, {
+    validate: clampHistoryCapacity,
+  });
   // Listen-source state - persisted (port, format, defaults).
-  const [listenPort,         setListenPort]         = usePersistedState("listenPort",         5555);
-  const [listenFormat,       setListenFormat]       = usePersistedState("listenFormat",       2);
-  const [listenSampleRate,   setListenSampleRate]   = usePersistedState("listenSampleRate",   48000);
-  const [listenCenterFreq,   setListenCenterFreq]   = usePersistedState("listenCenterFreq",   0);
+  const [listenPort,         setListenPort]         = usePersistedState("listenPort",         5555, {
+    validate: clampListenPort,
+  });
+  const [listenFormat,       setListenFormat]       = usePersistedState("listenFormat",       2, {
+    validate: clampListenFormat,
+  });
+  const [listenSampleRate,   setListenSampleRate]   = usePersistedState("listenSampleRate",   48000, {
+    validate: clampListenSampleRate,
+  });
+  const [listenCenterFreq,   setListenCenterFreq]   = usePersistedState("listenCenterFreq",   0, {
+    validate: clampListenCenterFreq,
+  });
   const [listenExpectHeader, setListenExpectHeader] = usePersistedState("listenExpectHeader", true);
   // Tracks the source picked from the Input tab. Persisted so the
   // selection survives sidebar-tab unmount/remount (InputTab tears
@@ -257,7 +285,7 @@ export default function SignalAnalyzer({
     });
   }, [cmd]);
   const hPeakMinLevel = useCallback((v) => {
-    const n = Math.max(-130, Math.min(0, +v));
+    const n = clampPeakMinLevel(v);
     setPeakMinLevel(n);
     cmd?.("set_peak_min_level", n);
   }, [cmd]);
@@ -271,7 +299,7 @@ export default function SignalAnalyzer({
     cmd?.("set_overlap", pct);
   }, [cmd]);
   const hReplaySpeed = useCallback((v) => {
-    const n = Math.max(0.1, Math.min(32, +v || 1.0));
+    const n = clampReplaySpeed(v);
     setReplaySpeed(n);
     cmd?.("set_replay_speed", n);
   }, [cmd]);
@@ -281,11 +309,11 @@ export default function SignalAnalyzer({
     cmd?.("set_taper_count", k);
   }, [cmd]);
   const hHistoryChunk = useCallback((v) => {
-    const n = Math.max(64, Math.min(8192, Math.round(+v)));
+    const n = clampHistoryChunk(v);
     setHistoryChunk(n);
   }, []);
   const hHistoryCapacity = useCallback((v) => {
-    const n = Math.max(256, Math.min(65536, Math.round(+v)));
+    const n = clampHistoryCapacity(v);
     setHistoryCapacity(n);
     cmd?.("set_history_capacity", n);
   }, [cmd]);
@@ -342,22 +370,22 @@ export default function SignalAnalyzer({
     cmd("export_capture", { format, source, path });
   }, [cmd]);
   const hListenPort = useCallback((v) => {
-    const p = Math.max(1, Math.min(65535, Math.round(+v)));
+    const p = clampListenPort(v);
     setListenPort(p);
     cmd?.("set_listen_port", p);
   }, [cmd]);
   const hListenFormat = useCallback((v) => {
-    const f = Math.max(0, Math.min(3, +v));
+    const f = clampListenFormat(v);
     setListenFormat(f);
     cmd?.("set_listen_format", f);
   }, [cmd]);
   const hListenSampleRate = useCallback((v) => {
-    const sr = Math.max(1, Math.round(+v));
+    const sr = clampListenSampleRate(v);
     setListenSampleRate(sr);
     cmd?.("set_listen_sample_rate", sr);
   }, [cmd]);
   const hListenCenterFreq = useCallback((v) => {
-    const cf = Math.max(0, Math.round(+v));
+    const cf = clampListenCenterFreq(v);
     setListenCenterFreq(cf);
     cmd?.("set_listen_center_freq", cf);
   }, [cmd]);

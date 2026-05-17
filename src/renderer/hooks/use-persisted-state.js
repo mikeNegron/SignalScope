@@ -29,15 +29,20 @@ function coerceToDefaultType(value, defaultValue) {
   }
 }
 
-function readPersisted(key, defaultValue) {
+function readPersisted(key, defaultValue, opts) {
+  // opts.validate(v) runs after coercion so call sites can enforce
+  // domain constraints (e.g., clamp a hand-edited or stale value to a
+  // safe range) before the value lands in React state. Applied on every
+  // return path so a bad load can't bypass the clamp.
+  const finalize = typeof opts?.validate === 'function' ? opts.validate : (v) => v;
   try {
     const raw = window.localStorage.getItem(NS + key);
-    if (raw == null) return defaultValue;
+    if (raw == null) return finalize(defaultValue);
     const parsed = JSON.parse(raw);
-    if (parsed?.v !== PERSIST_VERSION) return defaultValue;
-    return coerceToDefaultType(parsed.d, defaultValue);
+    if (parsed?.v !== PERSIST_VERSION) return finalize(defaultValue);
+    return finalize(coerceToDefaultType(parsed.d, defaultValue));
   } catch {
-    return defaultValue;
+    return finalize(defaultValue);
   }
 }
 
@@ -52,8 +57,8 @@ function writePersisted(key, value) {
   }
 }
 
-export function usePersistedState(key, defaultValue) {
-  const [value, setValue] = useState(() => readPersisted(key, defaultValue));
+export function usePersistedState(key, defaultValue, opts) {
+  const [value, setValue] = useState(() => readPersisted(key, defaultValue, opts));
   // Coalesce bursty updates (knob drag) into one write per frame.
   const pendingRef = useRef(null);
   useEffect(() => {
@@ -74,3 +79,6 @@ export function usePersistedState(key, defaultValue) {
   }, [key, value]);
   return [value, setValue];
 }
+
+// Exported for direct unit testing; production code uses the hook above.
+export { readPersisted, writePersisted };

@@ -111,10 +111,13 @@ function useBackendConnection(url = "ws://localhost:8765") {
       gotDataRef.current = false;
       setConnected(false);
       // Null out data fields so the GPU RAF loop stops drawing immediately.
-      // Keep the pre-allocated arrays (_iqRe, _iqIm) alive - they'll be reused
-      // on reconnect without reallocation.
+      // _iqRe/_iqIm are nulled too: keeping them alive saved one allocation
+      // on reconnect, but a rapid reconnect could briefly render OLD IQ
+      // alongside the NEW spectrum/waveform. wire-parse.js reallocates on
+      // the first post-reconnect IQ frame (length-check in its IQ branch).
       const b = buf.current;
       b.spectrum = null; b.waveform = null; b.iq = null;
+      b._iqRe = null; b._iqIm = null;
       b.phase = null; b.histogram = null;
       b.spectrumHold = null;
       b.frameId = 0; b.clipping = false; b.sampleRate = 48000;
