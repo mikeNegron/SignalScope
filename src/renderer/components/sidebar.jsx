@@ -214,6 +214,7 @@ export function Sidebar({
             historyChunk={historyChunk}
             onHistoryChunk={onHistoryChunk}
             onExport={onExport}
+            backendConnected={backendConnected}
           />
         )}
       </div>

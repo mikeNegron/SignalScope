@@ -153,3 +153,8 @@ input[type="range"]::-webkit-slider-thumb {
 select:focus {
   border-color: #0891b2;
 }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

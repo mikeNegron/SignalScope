@@ -1,6 +1,13 @@
 import { T } from "../../lib/tokens.js";
 import { Knob, Sel, Btn, Section, NumInput } from "../controls.jsx";
 import { exportPNG } from "../../lib/export.js";
+import { useState, useCallback, useEffect } from "react";
+import { Toast } from "../Toast.jsx";
+
+// Reconnect-await deadline for the Diagnostics Restart/Start flows.
+// The IPC resolves when the main-process spawn returns; the renderer
+// then waits up to this long for the WS to handshake before erroring.
+const RECONNECT_TIMEOUT_MS = 10000;
 
 export function SettingsTab({
   brightness,
@@ -53,7 +60,116 @@ export function SettingsTab({
   onHistoryCapacity,
   historyChunk = 512,
   onHistoryChunk,
+  backendConnected = false,
 }) {
+  // Diagnostics: backend lifecycle controls. The IPC handlers + preload
+  // bridge are wired in main.js / preload.js; we surface them here.
+  //
+  // toast = null | one of:
+  //   { kind: 'pending', msg }                                  — IPC in flight
+  //   { kind: 'pending', msg, awaiting: { successMsg, deadline } } — waiting for WS reconnect
+  //   { kind: 'success', msg }
+  //   { kind: 'error',   msg }
+  //
+  // The split-pending shape exists because the IPC resolves when the
+  // main-process spawn returns; the WS reconnect lands a few hundred ms
+  // later. Without the awaiting phase, "success" would flash before the
+  // backend is actually serving frames.
+  const [toast, setToast] = useState(null);
+  const dismissToast = useCallback(() => setToast(null), []);
+
+  // When we're awaiting a reconnect and the WS lands, promote pending → success.
+  useEffect(() => {
+    if (toast?.kind !== "pending" || !toast.awaiting) return;
+    if (backendConnected) {
+      setToast({ kind: "success", msg: toast.awaiting.successMsg });
+    }
+  }, [backendConnected, toast]);
+
+  // Watchdog: error out if the WS doesn't come back within the deadline.
+  useEffect(() => {
+    if (toast?.kind !== "pending" || !toast.awaiting) return;
+    const remaining = toast.awaiting.deadline - Date.now();
+    if (remaining <= 0) {
+      setToast({ kind: "error", msg: "Backend did not reconnect in time" });
+      return;
+    }
+    const t = setTimeout(() => {
+      setToast({ kind: "error", msg: "Backend did not reconnect in time" });
+    }, remaining);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const runLifecycle = useCallback(async ({ action, pendingMsg, successMsg, awaitReconnect }) => {
+    // Re-entrancy guard: ignore clicks while an action is in flight.
+    if (toast?.kind === "pending") return;
+
+    const bridge = window.signalscope?.[action];
+    if (typeof bridge !== "function") {
+      setToast({ kind: "error", msg: `Bridge function ${action} unavailable` });
+      return;
+    }
+
+    setToast({ kind: "pending", msg: pendingMsg });
+
+    let result;
+    try {
+      result = await bridge();
+    } catch (err) {
+      setToast({ kind: "error", msg: err?.message || String(err) });
+      return;
+    }
+
+    // The IPC handlers return { success: true|false, reason?, already? }.
+    if (result?.success === false) {
+      setToast({ kind: "error", msg: result.reason || `${action} failed` });
+      return;
+    }
+
+    // Start short-circuits with { already: true } if backend is already running.
+    if (awaitReconnect && !result?.already) {
+      setToast({
+        kind: "pending",
+        msg: "Waiting for backend to reconnect...",
+        awaiting: {
+          successMsg,
+          deadline: Date.now() + RECONNECT_TIMEOUT_MS,
+        },
+      });
+      return;
+    }
+
+    setToast({ kind: "success", msg: successMsg });
+  }, [toast]);
+
+  const onRestart = useCallback(
+    () => runLifecycle({
+      action: "restartBackend",
+      pendingMsg: "Restarting backend...",
+      successMsg: "Backend restarted",
+      awaitReconnect: true,
+    }),
+    [runLifecycle],
+  );
+  const onStart = useCallback(
+    () => runLifecycle({
+      action: "startBackend",
+      pendingMsg: "Starting backend...",
+      successMsg: "Backend started",
+      awaitReconnect: true,
+    }),
+    [runLifecycle],
+  );
+  const onStop = useCallback(
+    () => runLifecycle({
+      action: "stopBackend",
+      pendingMsg: "Stopping backend...",
+      successMsg: "Backend stopped",
+      awaitReconnect: false,
+    }),
+    [runLifecycle],
+  );
+
   // Clamp the Tune slider to ±fs/2 for the current source rate so the user
   // can't drag past Nyquist.
   const tuneMax = Math.max(1, Math.round(sampleRate / 2));
@@ -280,6 +396,41 @@ export function SettingsTab({
           WAV/AIFF: waveform · CSV/RAW: spectrum · PNG: capture
         </div>
       </Section>
+      <Section label="Diagnostics">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Btn
+            onClick={onRestart}
+            active
+            title="Stop and immediately restart the backend process"
+            testid="diagnostics-restart"
+          >
+            Restart Backend
+          </Btn>
+          <Btn
+            onClick={onStart}
+            active={!backendConnected}
+            title={backendConnected
+              ? "Backend is already running"
+              : "Start the backend process"}
+            testid="diagnostics-start"
+          >
+            Start
+          </Btn>
+          <Btn
+            onClick={onStop}
+            active={backendConnected}
+            title={backendConnected
+              ? "Stop the backend process"
+              : "Backend is not running"}
+            testid="diagnostics-stop"
+          >
+            Stop
+          </Btn>
+        </div>
+      </Section>
+      {toast && (
+        <Toast kind={toast.kind} msg={toast.msg} onDismiss={dismissToast} />
+      )}
     </div>
   );
 }
