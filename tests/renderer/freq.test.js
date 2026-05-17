@@ -234,3 +234,30 @@ describe('binToT - visual bin to t-fraction (shader-aligned)', () => {
     expect(binToT(0, 0)).toBe(0);
   });
 });
+
+describe('sampleRate <= 0 guards', () => {
+  it('logK returns 0 when sampleRate is 0', () => {
+    expect(logK(0)).toBe(0);
+  });
+
+  it('logK returns 0 when sampleRate is negative', () => {
+    expect(logK(-1)).toBe(0);
+  });
+
+  it('logK returns 0 when sampleRate is NaN', () => {
+    expect(logK(NaN)).toBe(0);
+  });
+
+  it('tToFreq returns 0 when sampleRate is 0', () => {
+    expect(tToFreq(0.5, 0, 0, false, 'linear')).toBe(0);
+  });
+
+  it('freqToT returns 0 when sampleRate is 0', () => {
+    expect(freqToT(1000, 0, 0, false, 'linear')).toBe(0);
+  });
+
+  it('tToFreq returns 0 when sampleRate is Infinity', () => {
+    // Defensive: Infinity divides poorly into the linear / log paths.
+    expect(tToFreq(0.5, Infinity, 0, false, 'linear')).toBe(0);
+  });
+});

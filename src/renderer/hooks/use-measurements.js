@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { safeFreqDenominator } from "../lib/numeric-safe.js";
 
 // Derive sidebar measurements from a snapshot of the backend's SpectrumStats
 // frame. Peaks, noise floor and fundamental are computed in C++; the renderer
@@ -9,6 +10,7 @@ import { useMemo } from "react";
 export function useMeasurements(stats, sampleRate, centerFreq = 0, twoSided = false) {
   return useMemo(() => {
     if (!stats || !stats.peaks?.length) return null;
+    if (safeFreqDenominator(sampleRate) == null) return null;
     const peaks = stats.peaks;
     const N = peaks[0].N;
     const binToFreq = (bin) => {

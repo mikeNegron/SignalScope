@@ -9,6 +9,8 @@
 // log of negative frequency is undefined. Log axis spans [LOG_FMIN_HZ, fs/2]
 // with 20 Hz as the lower bound (audio-grade default).
 
+import { safeFreqDenominator } from './numeric-safe.js';
+
 export const LOG_FMIN_HZ = 20;
 
 // True when log axis is meaningful for this configuration.
@@ -19,6 +21,7 @@ function logActive(twoSided, scale) {
 /// Map a fractional x position (0..1, left -> right of plot) to an absolute
 /// frequency in Hz.
 export function tToFreq(t, sampleRate, centerFreq, twoSided, scale = 'linear') {
+  if (safeFreqDenominator(sampleRate) == null) return 0;
   if (logActive(twoSided, scale)) {
     const fmax = sampleRate / 2;
     const fmin = LOG_FMIN_HZ;
@@ -31,6 +34,7 @@ export function tToFreq(t, sampleRate, centerFreq, twoSided, scale = 'linear') {
 /// Inverse of tToFreq: map an absolute frequency in Hz back to a 0..1 x
 /// position in the plot. Result is unclamped - callers can clamp if needed.
 export function freqToT(f, sampleRate, centerFreq, twoSided, scale = 'linear') {
+  if (safeFreqDenominator(sampleRate) == null) return 0;
   if (logActive(twoSided, scale)) {
     const fmax = sampleRate / 2;
     const fmin = LOG_FMIN_HZ;
@@ -88,6 +92,7 @@ export function binToFreq(bin, dataLength, sampleRate, centerFreq, twoSided) {
 /// uploaded as a shader uniform - keeps the GPU and CPU sides in sync on
 /// where each frequency lands.
 export function logK(sampleRate) {
+  if (safeFreqDenominator(sampleRate) == null) return 0;
   return Math.log(sampleRate / 2 / LOG_FMIN_HZ);
 }
 

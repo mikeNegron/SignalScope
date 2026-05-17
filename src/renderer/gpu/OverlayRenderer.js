@@ -7,6 +7,7 @@ import { _compile, _link, hexRGBA } from './TextRenderer.js';
 import { T, PEAK_PALETTE } from '../lib/tokens.js';
 import { ML, MR, MT, MB } from './GridRenderer.js';
 import { binToT, freqToT } from '../lib/freq.js';
+import { valueToY } from '../lib/numeric-safe.js';
 
 const VERT = `#version 300 es
 in vec2 a_pos;
@@ -144,7 +145,11 @@ export class OverlayRenderer {
       // clamped to the edge would lie about where the peak actually is.
       if (tView < 0 || tView > 1) continue;
       const px = ml + tView * plotW;
-      const py = mt + ((dBmax - value) / (dBmax - dBmin)) * plotH;
+      const py = valueToY(value, dBmin, dBmax, mt, plotH);
+      // valueToY returns null when dBmax <= dBmin (degenerate auto-range)
+      // or the peak's value is non-finite. Skip the marker rather than
+      // clamping a NaN to the canvas corner.
+      if (py == null) continue;
       const cpx = Math.max(ml + 3 * d, Math.min(w - mr - 3 * d, px));
       const cpy = Math.max(mt + 3 * d, Math.min(h - mb - 3 * d, py));
       centers[0] = cpx; centers[1] = cpy;

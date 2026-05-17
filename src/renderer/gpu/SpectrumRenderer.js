@@ -7,6 +7,7 @@ import { _compile, _link, hexRGBA } from './TextRenderer.js';
 import { T } from '../lib/tokens.js';
 import { ML, MR, MT, MB } from './GridRenderer.js';
 import { logK } from '../lib/freq.js';
+import { enforceMinSpread } from '../lib/numeric-safe.js';
 
 // Map a linear data position t∈[0,1] to its screen position. For linear axis
 // this is a no-op; for log axis we map (t * fmax) -> log(...) / log(fmax/fmin).
@@ -173,8 +174,13 @@ export class SpectrumRenderer {
     const xMin = settings?.viewXMin ?? 0;
     const xMax = settings?.viewXMax ?? 1;
     // Y-axis range (Flatten mode rewrites these from EMA-smoothed extrema).
-    const dbLo = settings?.dBmin ?? -130;
-    const dbHi = settings?.dBmax ?? 10;
+    let dbLo = settings?.dBmin ?? -130;
+    let dbHi = settings?.dBmax ?? 10;
+    // Defense in depth: the shader does `(u_dBmax - db) / (u_dBmax -
+    // u_dBmin)` and would NaN if dbLo === dbHi. The Flatten-EMA path
+    // already enforces a 1 dB minimum (RenderSurface.jsx); 0.01 here
+    // catches any future code path that bypasses that.
+    ({ lo: dbLo, hi: dbHi } = enforceMinSpread(dbLo, dbHi, 0.01));
 
     // Fill pass
     gl.useProgram(this.fillProg);

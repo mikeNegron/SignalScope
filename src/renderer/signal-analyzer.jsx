@@ -522,7 +522,7 @@ export default function SignalAnalyzer({
     ),
     waveform: (
       <span style={{ fontFamily: T.font, fontSize: 9, color: T.textMuted }}>
-        {((512 / sampleRate) * 1000).toFixed(2)} ms
+        {sampleRate > 0 ? ((512 / sampleRate) * 1000).toFixed(2) : "--"} ms
       </span>
     ),
     iq: (

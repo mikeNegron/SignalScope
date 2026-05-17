@@ -5,6 +5,7 @@
 import { _compile, _link, hexRGBA } from './TextRenderer.js';
 import { T } from '../lib/tokens.js';
 import { tToFreq, freqToT, fmtFreqShort, LOG_FMIN_HZ } from '../lib/freq.js';
+import { clampLogPositive } from '../lib/numeric-safe.js';
 
 const VERT = `#version 300 es
 in vec2 a_pos;
@@ -101,7 +102,7 @@ _spectrum(w, h, sr, centerFreq, twoSided, scale, xMin, xMax, dBmin, dBmax) {
     const range = dBmax - dBmin;
     const targetTicks = 8;
     const rawStep = range / targetTicks;
-    const pow10 = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const pow10 = Math.pow(10, Math.floor(Math.log10(clampLogPositive(rawStep, 1))));
     const norm = rawStep / pow10;
     const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * pow10;
     const start = Math.ceil(dBmin / step) * step;
@@ -147,7 +148,7 @@ _spectrum(w, h, sr, centerFreq, twoSided, scale, xMin, xMax, dBmin, dBmax) {
       // Major ticks at decades. We still iterate the whole [fmin, fmax]
       // band rather than computing the visible window explicitly; the
       // (t < 0 || t > 1) check below filters to the viewport.
-      const decStart = Math.pow(10, Math.floor(Math.log10(fmin)));
+      const decStart = Math.pow(10, Math.floor(Math.log10(clampLogPositive(fmin, 1))));
       for (let f = decStart; f <= fmax; f *= 10) {
         if (f < fmin) continue;
         const tAxis = freqToT(f, sr, centerFreq, twoSided, 'log');

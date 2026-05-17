@@ -8,6 +8,7 @@ import { GPURenderer } from '../gpu/GPURenderer.js';
 import { T } from '../lib/tokens.js';
 import { PANEL_KEYS } from '../hooks/use-panel-layout.js';
 import { tToFreq, fmtFreqShort, freqToT } from '../lib/freq.js';
+import { enforceMinSpread } from '../lib/numeric-safe.js';
 
 // Layout constants - must match the overlay DOM elements below.
 const HEADER_H  = 22; // visible panel title bar height (px)
@@ -264,6 +265,15 @@ export function RenderSurface({
             ar.lo = ALPHA * data.specMin + (1 - ALPHA) * ar.lo;
             ar.hi = ALPHA * data.specMax + (1 - ALPHA) * ar.hi;
           }
+          // Defense-in-depth: even with the outer specMax > specMin guard,
+          // a future code path or a manual ar mutation could collapse the
+          // EMA to a single value, which would propagate through the
+          // padding below into a degenerate dB range. Enforce a 1 dB
+          // minimum spread on ar itself so the padding always starts from
+          // a sane base.
+          const spread = enforceMinSpread(ar.lo, ar.hi, 1);
+          ar.lo = spread.lo;
+          ar.hi = spread.hi;
         }
         settings.dBmin = ar.lo - 6;
         settings.dBmax = ar.hi + 3;
