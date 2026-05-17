@@ -5,8 +5,7 @@ single distributable file. Spectrogram + spectrum + waveform + IQ + phase +
 histogram, fed by a real-time pipeline that handles file playback, microphone
 capture, and network SDR — all without the browser doing a single FFT.
 
-![SignalScope spectrum + spectrogram + sidebar](assets/screenshot.png)
-<!-- Placeholder: drop a 1600x900 PNG screenshot at assets/screenshot.png. -->
+![SignalScope spectrum + spectrogram + sidebar](assets/app.png)
 
 ---
 
