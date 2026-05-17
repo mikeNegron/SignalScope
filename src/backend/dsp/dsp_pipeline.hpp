@@ -43,7 +43,14 @@ public:
     void set_window(WindowFunction w) { config_.window = w; compute_window(); }
     void set_window(const std::string& name) { set_window(window_from_string(name)); }
     void set_gain(float db) { config_.gain_db = db; }
-    void set_avg_count(size_t n) { config_.avg_count = std::max<size_t>(1, n); }
+    void set_avg_count(size_t n) {
+        config_.avg_count = std::max<size_t>(1, n);
+        // Any change to the averaging window must take effect on the NEXT
+        // frame, not gradually drain over many. Clear both history buffers
+        // unconditionally so the running-average loop starts fresh.
+        avg_history_.clear();
+        avg_history_full_.clear();
+    }
     const Config& config() const { return config_; }
 
     // FFT window-stride overlap. factor=1 means back-to-back windows

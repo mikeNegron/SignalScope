@@ -61,10 +61,16 @@ inline bool write_raw_float32(const std::string& path,
     return true;
 }
 
+// WAV's RIFF chunk-size header field is uint32_t, so a payload whose
+// byte count exceeds UINT32_MAX cannot be expressed without truncation.
+constexpr std::size_t kMaxWavFloat32Samples =
+    static_cast<std::size_t>(UINT32_MAX) / sizeof(float);
+
 // Float32 mono WAV. fmt chunk: format=3 (IEEE float), bits=32, channels=1.
 // All multi-byte fields little-endian per the WAV spec.
 inline bool write_wav_float32(const std::string& path,
                               std::span<const float> data, float sr) {
+    if (data.size() > kMaxWavFloat32Samples) return false;
     std::FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) return false;
     const std::uint32_t data_bytes =
@@ -87,11 +93,17 @@ inline bool write_wav_float32(const std::string& path,
     return true;
 }
 
+// AIFF's FORM chunk-size header field is uint32_t, so a payload whose
+// byte count (2 bytes/sample int16) exceeds UINT32_MAX cannot fit.
+constexpr std::size_t kMaxAiffInt16Samples =
+    static_cast<std::size_t>(UINT32_MAX) / 2;
+
 // Int16 big-endian AIFF, mono. The sample-rate field is an 80-bit IEEE
 // extended-precision float in network byte order; for integer rates this
 // reduces to (exponent, mantissa) = (16383 + floor(log2 sr), sr / 2^E).
 inline bool write_aiff_int16(const std::string& path,
                              std::span<const float> data, float sr) {
+    if (data.size() > kMaxAiffInt16Samples) return false;
     std::FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) return false;
     auto wbe32 = [&](std::uint32_t v) {

@@ -68,6 +68,14 @@ endfunction()
 # Pure-function coverage for ws_framing.hpp. No sockets, no threads.
 signalscope_add_test(test_ws_framing test_ws_framing.cpp)
 
+# Pure-function coverage for util/iq_panel.hpp - the WS-broadcast IQ panel
+# stride clamp. Pins the hop_size < 2 edge case the inline conditional
+# clamp used to miss.
+signalscope_add_test(test_iq_panel test_iq_panel.cpp)
+
+# WAV/AIFF size cap (refuse to write malformed > 4 GB chunks).
+signalscope_add_test(test_file_exports_overflow test_file_exports_overflow.cpp)
+
 # Signal-processing correctness for the Hilbert transformer. Catches the
 # anti-symmetric-kernel-iteration-direction bug where the analytic signal
 # comes out conjugated.
@@ -121,6 +129,10 @@ signalscope_link_fft_backend(test_window_calibration)
 # reduction, tone calibration, resize-time recomputation.
 signalscope_add_test(test_multitaper test_multitaper.cpp)
 signalscope_link_fft_backend(test_multitaper)
+
+# DSPPipeline state transitions across set_* mutations.
+signalscope_add_test(test_dsp_pipeline_state test_dsp_pipeline_state.cpp)
+signalscope_link_fft_backend(test_dsp_pipeline_state)
 
 # SpectrumHistory ring (backend-held deep history). Pure data
 # structure, no FFT needed.

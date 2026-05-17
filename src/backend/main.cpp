@@ -41,6 +41,7 @@
 
 #include "protocol/protocol.hpp"
 #include "protocol/ws_framing.hpp"
+#include "util/iq_panel.hpp"
 #include "util/ring_buffer.hpp"
 #include "dsp/fft/fft_backend.hpp"
 #include "dsp/dsp_pipeline.hpp"
@@ -526,10 +527,11 @@ namespace signalscope
             // next iq_len are Q. Renderer can take two subarrays directly with
             // no per-sample loop. Capped at hop_size since iq_re/im and
             // input_buffer hold one hop of fresh samples per iteration.
-            size_t iq_len = std::min<size_t>(hop_size / 2, 512);
-            // For real-source stride we read input[i*2] / input[i*2+1], so
-            // we need 2·iq_len addressable elements.
-            if (!out_complex) iq_len = std::min(iq_len, hop_size / 2);
+            //
+            // clamp_iq_len() enforces iq_len*2 <= hop_size unconditionally so the
+            // real-source stride loop below (input_buffer[i*2 + 1]) stays in-bounds
+            // even when hop_size < 2. See util/iq_panel.hpp.
+            size_t iq_len = clamp_iq_len(512, hop_size);
             std::vector<float> iq_data(iq_len * 2);
             float* iq_i = iq_data.data();
             float* iq_q = iq_data.data() + iq_len;
@@ -1456,9 +1458,16 @@ while (!drop && c.handshaked && !c.inbox.empty()) {
             // fds don't get index-misaligned with pfds. They sit
             // unhandshaked until the next poll picks up their GET.
             if (pfds[0].revents & POLLIN) {
-                for (;;) {
+                // Cap accepts per poll cycle to prevent a connection burst
+                // from blowing up the pfds rebuild loop. Sixteen is well above
+                // expected per-cycle accept volume in normal use and bounds
+                // the worst-case O(N^2) cost during connection storms.
+                constexpr int kMaxAcceptsPerCycle = 16;
+                int accepted_this_cycle = 0;
+                while (accepted_this_cycle < kMaxAcceptsPerCycle) {
                     int fd = accept(server_fd, nullptr, nullptr);
                     if (fd < 0) break;
+                    accepted_this_cycle++;
                     fcntl(fd, F_SETFL, O_NONBLOCK);
                     clients.push_back({fd, /*handshaked*/ false, std::string{}});
                     std::osyncstream(std::cout) << "[ws] Client connected (" << clients.size()
