@@ -77,7 +77,7 @@ export function RenderSurface({
   dataRef,        // ref whose .current = { spectrum, waveform, iq, phase, histogram, spectrumHold }
   // settings
   sampleRate, centerFreq = 0, spectrumTwoSided = false,
-  colorMap, brightness, contrast, scrollSpeed,
+  colorMap, brightness, contrast, scrollSpeed, smoothSpectrogram = false,
   showPeaks, periodicityBars, fundamentalFreq, peakHold = false,
   freqScale = "linear",
   // "none" | "flatten" | "A-weight" | "C-weight". A/C-weight is applied
@@ -117,7 +117,8 @@ export function RenderSurface({
   const settingsRef = useRef({
     sampleRate: 48000, centerFreq: 0, spectrumTwoSided: false,
     colorMap: 'baudline', brightness: 50, contrast: 70,
-    scrollSpeed: 1, showPeaks: false, periodicityBars: false, fundamentalFreq: 0,
+    scrollSpeed: 1, smoothSpectrogram: false,
+    showPeaks: false, periodicityBars: false, fundamentalFreq: 0,
     peakHold: false, freqScale: "linear",
     weighting: "none",
     // Y-axis dB range. Defaults match the historical hardcoded constants
@@ -153,6 +154,7 @@ export function RenderSurface({
   s.brightness = brightness;
   s.contrast = contrast;
   s.scrollSpeed = scrollSpeed;
+  s.smoothSpectrogram = smoothSpectrogram;
   s.showPeaks = showPeaks;
   s.periodicityBars = periodicityBars;
   s.fundamentalFreq = fundamentalFreq;

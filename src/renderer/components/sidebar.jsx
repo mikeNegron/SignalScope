@@ -51,9 +51,11 @@ export function Sidebar({
   brightness,
   contrast,
   scrollSpeed,
+  smoothSpectrogram,
   onBrightness,
   onContrast,
   onScrollSpeed,
+  onSmoothSpectrogram,
   waveformData,
   freqScale,
   onFreqScale,
@@ -190,6 +192,8 @@ export function Sidebar({
             onBrightness={onBrightness}
             onContrast={onContrast}
             onScrollSpeed={onScrollSpeed}
+            smoothSpectrogram={smoothSpectrogram}
+            onSmoothSpectrogram={onSmoothSpectrogram}
             waveformData={waveformData}
             spectrumData={spectrumData}
             sampleRate={sampleRate}

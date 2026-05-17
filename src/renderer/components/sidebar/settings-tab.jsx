@@ -13,6 +13,8 @@ export function SettingsTab({
   brightness,
   contrast,
   scrollSpeed,
+  smoothSpectrogram = false,
+  onSmoothSpectrogram,
   onBrightness,
   onContrast,
   onScrollSpeed,
@@ -202,6 +204,14 @@ export function SettingsTab({
             min={1}
             max={10}
           />
+          <Btn
+            onClick={() => onSmoothSpectrogram?.(!smoothSpectrogram)}
+            active={smoothSpectrogram}
+            title="Beta. Interpolates spectrogram scroll between FFT frames for smoother visual motion. Purely visual - no effect on measurements, exports, or any DSP value. Most visible at FFT >= 8192 (slower FFT rate). Default off."
+            testid="display-smooth-scroll"
+          >
+            Smooth motion (beta)
+          </Btn>
         </div>
       </Section>
       <Section label="Freq Scale">

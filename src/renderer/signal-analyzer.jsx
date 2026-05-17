@@ -61,6 +61,7 @@ export default function SignalAnalyzer({
   const [brightness, setBrightness] = usePersistedState("brightness", 50);
   const [contrast, setContrast] = usePersistedState("contrast", 70);
   const [scrollSpeed, setScrollSpeed] = usePersistedState("scrollSpeed", 3);
+  const [smoothSpectrogram, setSmoothSpectrogram] = usePersistedState("smoothSpectrogram", false);
   const [paused, setPaused] = useState(false);
   const [peakHold, setPeakHold] = usePersistedState("peakHold", false);
   const [freqScale, setFreqScale] = usePersistedState("freqScale", "linear");
@@ -634,6 +635,7 @@ export default function SignalAnalyzer({
           brightness={brightness}
           contrast={contrast}
           scrollSpeed={scrollSpeed}
+          smoothSpectrogram={smoothSpectrogram}
           showPeaks={showPeaks}
           peakHold={peakHold}
           periodicityBars={periodicityBars}
@@ -704,6 +706,8 @@ export default function SignalAnalyzer({
             onBrightness={setBrightness}
             onContrast={setContrast}
             onScrollSpeed={setScrollSpeed}
+            smoothSpectrogram={smoothSpectrogram}
+            onSmoothSpectrogram={setSmoothSpectrogram}
             waveformData={snapWaveform}
             freqScale={freqScale}
             onFreqScale={setFreqScale}

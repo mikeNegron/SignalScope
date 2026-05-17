@@ -5,6 +5,7 @@
 import { _compile, _link } from './TextRenderer.js';
 import { CMAPS } from '../lib/tokens.js';
 import { logK } from '../lib/freq.js';
+import { makePhaseEstimator } from '../lib/phase-estimator.js';
 
 const VERT = `#version 300 es
 in vec2 a_pos;
@@ -21,6 +22,8 @@ uniform sampler2D u_cmap;
 uniform float u_brightness;
 uniform float u_contrast;
 uniform float u_head;
+uniform float u_scrollSpeed;  // 1 when smooth-scroll off; actual when on
+uniform float u_phase;        // [0,1] fractional progress through current FFT interval (0 when off)
 uniform float u_maxRows;
 uniform float u_visible;
 uniform float u_screenH;
@@ -49,7 +52,14 @@ void main() {
   // Newest row at y=yMin, oldest at y=yMax. Subtract row from u_head so
   // a fractional row interpolates between two real ring-buffer rows for
   // smooth time-axis zoom (the texture filter is LINEAR).
-  float idx = mod(u_head - 1.0 - row, u_maxRows);
+  // effRow shifts the screen-row coordinate by scrollSpeed*phase pixels,
+  // clamping to 0 at the top so the newest data "stripe" stays pinned to
+  // the top edge during the inter-arrival interval. effRow/u_scrollSpeed
+  // then maps screen pixels to fractional texture rows; LINEAR sampling
+  // interpolates between adjacent FFT rows. When smooth-scroll is off,
+  // u_scrollSpeed=1 and u_phase=0, reducing this to mod(u_head-1-row,..).
+  float effRow = max(0.0, row - u_scrollSpeed * u_phase);
+  float idx = mod(u_head - 1.0 - effRow / u_scrollSpeed, u_maxRows);
   float db = texture(u_data, vec2(u, (idx + 0.5) / u_maxRows)).r;
   float val = clamp((db + u_brightness) * u_contrast, 0.0, 1.0);
   outColor = texture(u_cmap, vec2(val, 0.5));
@@ -73,21 +83,23 @@ export class SpectrogramRenderer {
 
     const p = this.program;
     this._locs = {
-      aPos:       gl.getAttribLocation(p, 'a_pos'),
-      uData:      gl.getUniformLocation(p, 'u_data'),
-      uCmap:      gl.getUniformLocation(p, 'u_cmap'),
-      uBri:       gl.getUniformLocation(p, 'u_brightness'),
-      uCon:       gl.getUniformLocation(p, 'u_contrast'),
-      uHead:      gl.getUniformLocation(p, 'u_head'),
-      uMaxRows:   gl.getUniformLocation(p, 'u_maxRows'),
-      uVisible:   gl.getUniformLocation(p, 'u_visible'),
-      uScreenH:   gl.getUniformLocation(p, 'u_screenH'),
-      uScale:     gl.getUniformLocation(p, 'u_scale'),
-      uLogK:      gl.getUniformLocation(p, 'u_logK'),
-      uXMin:      gl.getUniformLocation(p, 'u_xMin'),
-      uXMax:      gl.getUniformLocation(p, 'u_xMax'),
-      uYMin:      gl.getUniformLocation(p, 'u_yMin'),
-      uYMax:      gl.getUniformLocation(p, 'u_yMax'),
+      aPos:         gl.getAttribLocation(p, 'a_pos'),
+      uData:        gl.getUniformLocation(p, 'u_data'),
+      uCmap:        gl.getUniformLocation(p, 'u_cmap'),
+      uBri:         gl.getUniformLocation(p, 'u_brightness'),
+      uCon:         gl.getUniformLocation(p, 'u_contrast'),
+      uHead:        gl.getUniformLocation(p, 'u_head'),
+      uScrollSpeed: gl.getUniformLocation(p, 'u_scrollSpeed'),
+      uPhase:       gl.getUniformLocation(p, 'u_phase'),
+      uMaxRows:     gl.getUniformLocation(p, 'u_maxRows'),
+      uVisible:     gl.getUniformLocation(p, 'u_visible'),
+      uScreenH:     gl.getUniformLocation(p, 'u_screenH'),
+      uScale:       gl.getUniformLocation(p, 'u_scale'),
+      uLogK:        gl.getUniformLocation(p, 'u_logK'),
+      uXMin:        gl.getUniformLocation(p, 'u_xMin'),
+      uXMax:        gl.getUniformLocation(p, 'u_xMax'),
+      uYMin:        gl.getUniformLocation(p, 'u_yMin'),
+      uYMax:        gl.getUniformLocation(p, 'u_yMax'),
     };
 
     this.texData = null;
@@ -109,6 +121,10 @@ export class SpectrogramRenderer {
     this._lastHistoryReps = -1;
     this._lastW = 0;
     this._lastH = 0;
+    // Smooth-scroll state. The estimator emits u_phase per draw; the
+    // last-flag sentinel detects toggle-off edges to reset EMA cleanly.
+    this._phaseEstimator = makePhaseEstimator();
+    this._lastSmoothScroll = false;
   }
 
   // Called once per frame for the spectrogram panel.
@@ -122,6 +138,12 @@ export class SpectrogramRenderer {
             historyMode = false } = settings;
     const isLog = freqScale === 'log';
     const k = isLog ? logK(sampleRate) : 0;
+
+    // Reset EMA on smooth-scroll toggle-off so a future on-flip starts fresh.
+    if (this._lastSmoothScroll && !settings.smoothSpectrogram) {
+      this._phaseEstimator.reset();
+    }
+    this._lastSmoothScroll = !!settings.smoothSpectrogram;
 
     // `data` is the full buf object: { spectrum, _history, ... }.
     // Two upload paths share the same texture and shader:
@@ -140,7 +162,10 @@ export class SpectrogramRenderer {
         this._rebuildDataTex(rl, mr);
         this._lastDataLen = dataLen;
       }
-      const reps = Math.max(1, scrollSpeed | 0);
+      // Mirror the live-path replication policy so history-mode and
+      // live-mode use the same texture layout. With smooth-scroll on,
+      // 1 row per FFT; the shader handles magnification.
+      const reps = settings.smoothSpectrogram ? 1 : Math.max(1, scrollSpeed | 0);
       if (hist.lastSeq !== this._lastHistorySeq
           || reps !== this._lastHistoryReps) {
         this._lastHistorySeq = hist.lastSeq;
@@ -178,7 +203,19 @@ export class SpectrogramRenderer {
       }
       if (specSeq !== this._lastSpecSeq) {
         this._lastSpecSeq = specSeq;
-        for (let s = 0; s < scrollSpeed; s++) this._uploadRow(spectrum);
+        if (settings.smoothSpectrogram) {
+          // Smooth-scroll path: 1 row per FFT in texture. The shader
+          // expands each FFT across scrollSpeed screen pixels via
+          // effRow/scrollSpeed. Replicating here would collapse the
+          // shader's interpolation between adjacent FFTs (since the
+          // texture would have identical adjacent rows).
+          this._phaseEstimator.onArrival(performance.now());
+          this._uploadRow(spectrum);
+        } else {
+          // Existing behavior: scrollSpeed copies provide vertical
+          // magnification; head advances by scrollSpeed per FFT.
+          for (let s = 0; s < scrollSpeed; s++) this._uploadRow(spectrum);
+        }
       }
     }
 
@@ -222,6 +259,14 @@ export class SpectrogramRenderer {
     gl.uniform1f(l.uBri, bri);
     gl.uniform1f(l.uCon, con);
     gl.uniform1f(l.uHead, this.glHead);
+    // u_scrollSpeed=1 when off so the shader's effRow/u_scrollSpeed
+    // degenerates to plain row, collapsing the formula to the original
+    // mod(u_head - 1 - row, u_maxRows). When on, pass the actual
+    // scrollSpeed so each FFT spans that many screen pixels.
+    gl.uniform1f(l.uScrollSpeed,
+      settings.smoothSpectrogram ? Math.max(1, scrollSpeed | 0) : 1);
+    gl.uniform1f(l.uPhase,
+      settings.smoothSpectrogram ? this._phaseEstimator.getPhase(performance.now()) : 0);
     gl.uniform1f(l.uMaxRows, this.glMaxRows);
     gl.uniform1f(l.uVisible, Math.min(this.glCount, h));
     gl.uniform1f(l.uScreenH, h);
